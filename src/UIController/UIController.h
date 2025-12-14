@@ -23,7 +23,7 @@ void update_graph_y_axis_labels(void);
 class UIController {
 public:
     UIController();
-    bool begin(int firmwareVersionMajor = 3, int firmwareVersionMinor = 94);
+    bool begin(int firmwareVersionMajor = 3, int firmwareVersionMinor = 95);
     void update();  // Aanroepen vanuit loop()
     void logGraphData();  // Aanroepen vanuit loop()
     

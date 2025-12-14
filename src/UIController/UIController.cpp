@@ -23,7 +23,7 @@ UIController::UIController()
       graph_temps(nullptr), graph_times(nullptr), graph_write_index(0), graph_count(0),
       graph_data_ready(false), graph_last_log_time(0), last_graph_update_ms(0),
       graph_force_rebuild(false), draw_buf(nullptr),
-      firmwareVersionMajor(3), firmwareVersionMinor(94),
+      firmwareVersionMajor(3), firmwareVersionMinor(95),
       last_display_ms(0), last_displayed_time(0) {
     // Initialiseer y_axis_labels array
     for (int i = 0; i < 6; i++) {

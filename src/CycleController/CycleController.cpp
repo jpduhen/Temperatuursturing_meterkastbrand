@@ -332,35 +332,43 @@ void CycleController::handleHeating() {
         return;
     }
     
-    // BEVEILIGING: Detecteer temperatuur stagnatie
-    if (isnan(laatste_temp_voor_stagnatie)) {
-        laatste_temp_voor_stagnatie = temp_for_check;
-        stagnatie_start_tijd = millis();
-    } else {
-        float temp_verschil = fabsf(temp_for_check - laatste_temp_voor_stagnatie);
-        if (temp_verschil <= TEMP_STAGNATIE_BANDWIDTH) {
-            unsigned long stagnatie_duur = millis() - stagnatie_start_tijd;
-            if (stagnatie_duur >= TEMP_STAGNATIE_TIJD_MS) {
-                yield();
-                logTransition("Beveiliging: Temperatuur stagnatie", temp_for_check);
-                cyclus_actief = false;
-                systeem_uit = true;
-                verwarmen_actief = false;
-                stopAll();
-                koelingsfase_actief = true;
-                startCooling();
-                veiligheidskoeling_start_tijd = millis();
-                veiligheidskoeling_naloop_start_tijd = 0;
-                verwarmen_start_tijd = 0;
-                laatste_temp_voor_stagnatie = NAN;
-                stagnatie_start_tijd = 0;
-                yield();
-                return;
-            }
-        } else {
+    // BEVEILIGING: Detecteer temperatuur stagnatie (alleen als temp >35°C)
+    // BELANGRIJK: Alleen activeren als temperatuur >35°C (niet aanraak-veilig)
+    // Als temperatuur <35°C, hoeft beveiliging niet aan te spreken
+    if (temp_for_check > TEMP_SAFETY_COOLING) {
+        if (isnan(laatste_temp_voor_stagnatie)) {
             laatste_temp_voor_stagnatie = temp_for_check;
             stagnatie_start_tijd = millis();
+        } else {
+            float temp_verschil = fabsf(temp_for_check - laatste_temp_voor_stagnatie);
+            if (temp_verschil <= TEMP_STAGNATIE_BANDWIDTH) {
+                unsigned long stagnatie_duur = millis() - stagnatie_start_tijd;
+                if (stagnatie_duur >= TEMP_STAGNATIE_TIJD_MS) {
+                    yield();
+                    logTransition("Beveiliging: Temperatuur stagnatie", temp_for_check);
+                    cyclus_actief = false;
+                    systeem_uit = true;
+                    verwarmen_actief = false;
+                    stopAll();
+                    koelingsfase_actief = true;
+                    startCooling();
+                    veiligheidskoeling_start_tijd = millis();
+                    veiligheidskoeling_naloop_start_tijd = 0;
+                    verwarmen_start_tijd = 0;
+                    laatste_temp_voor_stagnatie = NAN;
+                    stagnatie_start_tijd = 0;
+                    yield();
+                    return;
+                }
+            } else {
+                laatste_temp_voor_stagnatie = temp_for_check;
+                stagnatie_start_tijd = millis();
+            }
         }
+    } else {
+        // Temperatuur <= 35°C: reset stagnatie tracking (beveiliging hoeft niet aan te spreken)
+        laatste_temp_voor_stagnatie = NAN;
+        stagnatie_start_tijd = 0;
     }
     
     if (temp_for_check >= T_top) {

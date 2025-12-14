@@ -1,4 +1,4 @@
-/*  versie 3.94
+/*  versie 3.95
     Jan Pieter Duhen
     Meterkastbrand onderzoek: Kooiklem maximaaltest
 
@@ -81,7 +81,7 @@
 
 // Versienummer - VERHOOG BIJ ELKE WIJZIGING
 #define FIRMWARE_VERSION_MAJOR 3
-#define FIRMWARE_VERSION_MINOR 94
+#define FIRMWARE_VERSION_MINOR 95
 
 // Temperatuur constanten
 #define TEMP_SAFE_THRESHOLD 37.0        // Temperatuur grens voor veilig aanraken (groen < 37°C, rood >= 37°C)
@@ -2222,6 +2222,9 @@ void setup() {
   }
   
   if (WiFi.status() == WL_CONNECTED) {
+    // Verberg init status zodra WiFi verbonden is
+    uiController.hideInitStatus();
+    
     // BELANGRIJK: Gebruik char array i.p.v. String om heap fragmentatie te voorkomen
     char wifiInfo[128];
     snprintf(wifiInfo, sizeof(wifiInfo), "WiFi: %s (%s)", 
