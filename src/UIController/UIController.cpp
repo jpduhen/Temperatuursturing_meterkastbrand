@@ -23,7 +23,7 @@ UIController::UIController()
       graph_temps(nullptr), graph_times(nullptr), graph_write_index(0), graph_count(0),
       graph_data_ready(false), graph_last_log_time(0), last_graph_update_ms(0),
       graph_force_rebuild(false), draw_buf(nullptr),
-      firmwareVersionMajor(3), firmwareVersionMinor(96),
+      firmwareVersionMajor(3), firmwareVersionMinor(97),
       last_display_ms(0), last_displayed_time(0) {
     // Initialiseer y_axis_labels array
     for (int i = 0; i < 6; i++) {
@@ -52,17 +52,14 @@ bool UIController::begin(int firmwareVersionMajor, int firmwareVersionMinor) {
 }
 
 void UIController::update() {
-    // Update temperatuur display (elke 285ms, synchroon met sampling)
-    unsigned long now = millis();
-    if (now - last_display_ms >= TEMP_DISPLAY_UPDATE_MS) {
-        last_display_ms = now;
-        
-        // Gebruik mediaan temperatuur (via callback)
-        float avgTemp = getMedianTempCallback ? getMedianTempCallback() : NAN;
-        float lastValidTemp = getLastValidTempCallback ? getLastValidTempCallback() : NAN;
-        
-        updateTemperature(avgTemp, lastValidTemp);
-    }
+    // Update temperatuur display (elke keer dat update() wordt aangeroepen)
+    // Timing wordt al gecontroleerd in loop() via GUI_UPDATE_INTERVAL_MS
+    
+    // Gebruik mediaan temperatuur (via callback)
+    float avgTemp = getMedianTempCallback ? getMedianTempCallback() : NAN;
+    float lastValidTemp = getLastValidTempCallback ? getLastValidTempCallback() : NAN;
+    
+    updateTemperature(avgTemp, lastValidTemp);
     
     // Update cyclus teller - formaat: "Cycli: xxx/yyy" of "Cycli: xxx/inf"
     if (text_label_cyclus != nullptr && getCycleCountCallback && cyclusMaxCallback) {
@@ -313,31 +310,27 @@ void UIController::onTempOffsetMinus() {
 void UIController::updateTemperature(float temp, float lastValidTemp) {
     if (text_label_temp_value == nullptr) return;
     
-    unsigned long now = millis();
-    if (now - last_display_ms >= TEMP_DISPLAY_UPDATE_MS) {
-        last_display_ms = now;
+    // Timing check wordt al gedaan in update(), dus direct updaten
+    char temp_text[16];
+    if (!isnan(temp)) {
+        snprintf(temp_text, sizeof(temp_text), "%.1f°C", temp);
+        lv_label_set_text(text_label_temp_value, temp_text);
         
-        char temp_text[16];
-        if (!isnan(temp)) {
-            snprintf(temp_text, sizeof(temp_text), "%.1f°C", temp);
-            lv_label_set_text(text_label_temp_value, temp_text);
-            
-            // Color coding: groen onder TEMP_SAFE_THRESHOLD, rood vanaf TEMP_SAFE_THRESHOLD
-            if (temp < TEMP_SAFE_THRESHOLD) {
-                lv_obj_set_style_text_color(text_label_temp_value, lv_color_hex(0x00AA00), 0);
-            } else {
-                lv_obj_set_style_text_color(text_label_temp_value, lv_color_hex(0xCC0000), 0);
-            }
-        } else if (!isnan(lastValidTemp)) {
-            // Geen nieuwe metingen, maar toon laatste geldige waarde (grijs)
-            snprintf(temp_text, sizeof(temp_text), "%.1f°C", lastValidTemp);
-            lv_label_set_text(text_label_temp_value, temp_text);
-            lv_obj_set_style_text_color(text_label_temp_value, lv_color_hex(0x808080), 0);
+        // Color coding: groen onder TEMP_SAFE_THRESHOLD, rood vanaf TEMP_SAFE_THRESHOLD
+        if (temp < TEMP_SAFE_THRESHOLD) {
+            lv_obj_set_style_text_color(text_label_temp_value, lv_color_hex(0x00AA00), 0);
         } else {
-            // Geen metingen - toon --.--
-            lv_label_set_text(text_label_temp_value, "--.--°C");
-            lv_obj_set_style_text_color(text_label_temp_value, lv_color_hex(0x808080), 0);
+            lv_obj_set_style_text_color(text_label_temp_value, lv_color_hex(0xCC0000), 0);
         }
+    } else if (!isnan(lastValidTemp)) {
+        // Geen nieuwe metingen, maar toon laatste geldige waarde (grijs)
+        snprintf(temp_text, sizeof(temp_text), "%.1f°C", lastValidTemp);
+        lv_label_set_text(text_label_temp_value, temp_text);
+        lv_obj_set_style_text_color(text_label_temp_value, lv_color_hex(0x808080), 0);
+    } else {
+        // Geen metingen - toon --.--
+        lv_label_set_text(text_label_temp_value, "--.--°C");
+        lv_obj_set_style_text_color(text_label_temp_value, lv_color_hex(0x808080), 0);
     }
 }
 

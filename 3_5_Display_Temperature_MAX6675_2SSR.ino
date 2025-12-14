@@ -1,4 +1,4 @@
-/*  versie 3.96
+/*  versie 3.97
     Jan Pieter Duhen
     Meterkastbrand onderzoek: Kooiklem maximaaltest
 
@@ -81,7 +81,7 @@
 
 // Versienummer - VERHOOG BIJ ELKE WIJZIGING
 #define FIRMWARE_VERSION_MAJOR 3
-#define FIRMWARE_VERSION_MINOR 96
+#define FIRMWARE_VERSION_MINOR 97
 
 // Temperatuur constanten
 #define TEMP_SAFE_THRESHOLD 37.0        // Temperatuur grens voor veilig aanraken (groen < 37°C, rood >= 37°C)
