@@ -1,4 +1,4 @@
-/*  versie 3.97
+/*  versie 3.98
     Jan Pieter Duhen
     Meterkastbrand onderzoek: Kooiklem maximaaltest
 
@@ -67,6 +67,7 @@
 #include "src/Logger/Logger.h"
 #include "src/CycleController/CycleController.h"
 #include "src/UIController/UIController.h"
+#include "src/WebServer/WebServer.h"
 /* --- Rob Tillaart MAX6675 (software SPI) ---
    Constructor order (since v0.2.0): MAX6675(select, miso, clock)
    Our pins: CS=21, SO(MISO)=35, SCK=22
@@ -81,7 +82,7 @@
 
 // Versienummer - VERHOOG BIJ ELKE WIJZIGING
 #define FIRMWARE_VERSION_MAJOR 3
-#define FIRMWARE_VERSION_MINOR 97
+#define FIRMWARE_VERSION_MINOR 98
 
 // Temperatuur constanten
 #define TEMP_SAFE_THRESHOLD 37.0        // Temperatuur grens voor veilig aanraken (groen < 37°C, rood >= 37°C)
@@ -119,6 +120,7 @@ TempSensor tempSensor(MAX6675_CS, MAX6675_SO, MAX6675_SCK);
 Logger logger;
 CycleController cycleController;
 UIController uiController;
+ConfigWebServer webServer;
 
 // Kalibratie offset voor MAX6675 (wordt geladen uit Preferences)
 float temp_offset = 0.0; // Kalibratie offset in °C
@@ -2275,6 +2277,80 @@ void setup() {
   // Zet alle knoppen terug naar normale kleuren (initialisatie compleet)
   uiController.setButtonsNormal();
   
+  // Initialiseer webserver (alleen als WiFi verbonden is)
+  if (WiFi.status() == WL_CONNECTED) {
+    webServer.setSettingsStore(&settingsStore);
+    webServer.setCycleController(&cycleController);
+    webServer.setTempSensor(&tempSensor);
+    webServer.setUIController(&uiController);
+    
+    // Stel callbacks in voor acties
+    webServer.setStartCallback([]() {
+      cycleController.start();
+      logToGoogleSheet("START");
+    });
+    
+    webServer.setStopCallback([]() {
+      logToGoogleSheet("STOP");
+      cycleController.stop();
+    });
+    
+    // Settings change callback
+    webServer.setSettingsChangeCallback([](float tTop, float tBottom, float tempOffset, int cycleMax) {
+      T_top = tTop;
+      T_bottom = tBottom;
+      temp_offset = tempOffset;
+      cyclus_max = cycleMax;
+      
+      // Valideer en corrigeer indien nodig
+      if (T_top >= TEMP_MAX) T_top = TEMP_MAX;
+      if (T_top < T_bottom + TEMP_MIN_DIFF) T_top = T_bottom + TEMP_MIN_DIFF;
+      if (T_bottom > T_top - TEMP_MIN_DIFF) T_bottom = T_top - TEMP_MIN_DIFF;
+      if (T_bottom < 0.0) T_bottom = 0.0;
+      if (temp_offset < -10.0) temp_offset = -10.0;
+      if (temp_offset > 10.0) temp_offset = 10.0;
+      if (cyclus_max < 0) cyclus_max = 0;
+      
+      // Sla instellingen op
+      Settings settings;
+      settings.tTop = T_top;
+      settings.tBottom = T_bottom;
+      settings.tempOffset = temp_offset;
+      settings.cycleMax = cyclus_max;
+      settingsStore.save(settings);
+      
+      // Pas instellingen toe
+      tempSensor.setOffset(temp_offset);
+      cycleController.setTargetTop(T_top);
+      cycleController.setTargetBottom(T_bottom);
+      cycleController.setMaxCycles(cyclus_max);
+      
+      // Log wijziging
+      char log_msg[64];
+      snprintf(log_msg, sizeof(log_msg), "Web: Top=%.1f, Dal=%.1f, Offset=%.1f, Max=%d", 
+               T_top, T_bottom, temp_offset, cyclus_max);
+      logToGoogleSheet(log_msg);
+    });
+    
+    // Stel status callbacks in
+    webServer.setGetCurrentTempCallback([]() { return g_currentTempC; });
+    webServer.setGetMedianTempCallback([]() { return getMedianTemp(); });
+    webServer.setIsActiveCallback([]() { return cycleController.isActive(); });
+    webServer.setIsHeatingCallback([]() { return cycleController.isHeating(); });
+    webServer.setGetCycleCountCallback([]() { return cycleController.getCycleCount(); });
+    webServer.setGetTtopCallback([]() { return T_top; });
+    webServer.setGetTbottomCallback([]() { return T_bottom; });
+    webServer.setGetCycleMaxCallback([]() { return cyclus_max; });
+    webServer.setGetTempOffsetCallback([]() { return temp_offset; });
+    
+    // Start webserver
+    webServer.begin(80);
+    
+    // Toon webserver IP in serial monitor
+    Serial.print("Webserver gestart op: http://");
+    Serial.println(WiFi.localIP());
+  }
+  
   // Logger module is al geïnitialiseerd in WiFi sectie hierboven
   // Update globale variabelen voor backward compatibility
   logQueue = nullptr; // Logger module handelt queue af
@@ -2285,6 +2361,11 @@ void loop() {
   // BELANGRIJK: Feed watchdog timer om crashes te voorkomen
   // Dit is de eerste regel om watchdog altijd te voeden
   yield();
+  
+  // Handle webserver requests (alleen als WiFi verbonden is)
+  if (WiFi.status() == WL_CONNECTED) {
+    webServer.handleClient();
+  }
   
   // BELANGRIJK: LVGL task handler - roep dit VAKER aan voor betere responsiviteit
   // Meerdere calls voor snellere touch response (vooral belangrijk voor terug-knop)
