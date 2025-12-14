@@ -30,6 +30,9 @@ Thumbs.db
 *.so
 
 # Credentials (be careful!)
-*.json  # Alle JSON bestanden (inclusief Google Sheets service account credentials)
+# Google Sheets service account credentials
+meterkast-v2-*.json
+*-*.json
+*.json
 !package.json  # Maar package.json mag wel (als die nodig is)
 
