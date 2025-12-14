@@ -1,4 +1,4 @@
-/*  versie 3.91
+/*  versie 3.94
     Jan Pieter Duhen
     Meterkastbrand onderzoek: Kooiklem maximaaltest
 
@@ -81,7 +81,7 @@
 
 // Versienummer - VERHOOG BIJ ELKE WIJZIGING
 #define FIRMWARE_VERSION_MAJOR 3
-#define FIRMWARE_VERSION_MINOR 92
+#define FIRMWARE_VERSION_MINOR 94
 
 // Temperatuur constanten
 #define TEMP_SAFE_THRESHOLD 37.0        // Temperatuur grens voor veilig aanraken (groen < 37°C, rood >= 37°C)
@@ -2294,7 +2294,7 @@ void loop() {
   
   // Behandel logging success feedback (vanuit Core 1 via Logger module)
   if (logger.hasLogSuccess()) {
-    showGSSuccessCheckmark();  // Toon groen vinkje
+    uiController.showGSSuccessCheckmark();  // Toon groen vinkje
     logger.clearLogSuccess();  // Reset flag
     // Update globale variabelen voor backward compatibility
     g_logSuccessFlag = false;
@@ -2337,13 +2337,7 @@ void loop() {
   static unsigned long last_gui_update = 0;
   if (lv_scr_act() == uiController.getMainScreen()) {
     if (millis() - last_gui_update >= GUI_UPDATE_INTERVAL_MS) {
-      // Update temperatuur display
-      uiController.updateTemperature(g_avgTempC, g_lastValidTempC);
-      
-      // Update status, cyclus teller, timers, settings, en knop kleuren
-      // TODO: Deze moeten nog worden geïmplementeerd in UIController::update()
-      // Voor nu: gebruik oude updateGUI() als fallback
-      updateGUI(); // Tijdelijk - wordt later vervangen door uiController.update()
+      uiController.update();
       last_gui_update = millis();
     }
   } else if (lv_scr_act() == uiController.getGraphScreen()) {

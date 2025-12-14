@@ -23,7 +23,7 @@ void update_graph_y_axis_labels(void);
 class UIController {
 public:
     UIController();
-    bool begin(int firmwareVersionMajor = 3, int firmwareVersionMinor = 92);
+    bool begin(int firmwareVersionMajor = 3, int firmwareVersionMinor = 94);
     void update();  // Aanroepen vanuit loop()
     void logGraphData();  // Aanroepen vanuit loop()
     
@@ -115,10 +115,10 @@ public:
 private:
     void fillChart();
     void clearChart();
+    void addChartPoint(int index, float tempValue, int chartValue);
     bool allocateBuffers();
     void initGraphData();
     void updateGraphYAxis();  // Voor update_graph_y_axis_labels()
-    void addChartPoint(int index, float tempValue, int chartValue);
     
     // Helper functies voor updates (nodig voor externe toegang)
     void formatTijdChar(unsigned long ms, char* buffer, size_t bufferSize);
@@ -193,6 +193,9 @@ private:
     unsigned long graph_last_log_time;
     unsigned long last_graph_update_ms;
     bool graph_force_rebuild;
+    
+    // Status tekst opslag (voor showGSSuccessCheckmark)
+    char last_gs_status_text[128];
     
     // Display buffer (voor LVGL)
     uint32_t* draw_buf;

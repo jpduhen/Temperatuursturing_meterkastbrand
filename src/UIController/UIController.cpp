@@ -2,6 +2,7 @@
 #include <Arduino.h>
 #include <math.h>
 #include <stdio.h>
+#include <string.h>
 
 // Constructor - initialiseer alle pointers naar nullptr
 UIController::UIController() 
@@ -22,12 +23,14 @@ UIController::UIController()
       graph_temps(nullptr), graph_times(nullptr), graph_write_index(0), graph_count(0),
       graph_data_ready(false), graph_last_log_time(0), last_graph_update_ms(0),
       graph_force_rebuild(false), draw_buf(nullptr),
-      firmwareVersionMajor(3), firmwareVersionMinor(92),
+      firmwareVersionMajor(3), firmwareVersionMinor(94),
       last_display_ms(0), last_displayed_time(0) {
     // Initialiseer y_axis_labels array
     for (int i = 0; i < 6; i++) {
         y_axis_labels[i] = nullptr;
     }
+    // Initialiseer last_gs_status_text
+    last_gs_status_text[0] = '\0';
 }
 
 bool UIController::begin(int firmwareVersionMajor, int firmwareVersionMinor) {
@@ -49,11 +52,187 @@ bool UIController::begin(int firmwareVersionMajor, int firmwareVersionMinor) {
 }
 
 void UIController::update() {
-    // Placeholder - wordt later geïmplementeerd
+    // Update temperatuur display (elke 285ms, synchroon met sampling)
+    unsigned long now = millis();
+    if (now - last_display_ms >= TEMP_DISPLAY_UPDATE_MS) {
+        last_display_ms = now;
+        
+        // Gebruik mediaan temperatuur (via callback)
+        float avgTemp = getMedianTempCallback ? getMedianTempCallback() : NAN;
+        float lastValidTemp = getLastValidTempCallback ? getLastValidTempCallback() : NAN;
+        
+        updateTemperature(avgTemp, lastValidTemp);
+    }
+    
+    // Update cyclus teller - formaat: "Cycli: xxx/yyy" of "Cycli: xxx/inf"
+    if (text_label_cyclus != nullptr && getCycleCountCallback && cyclusMaxCallback) {
+        char cyclus_text[32];
+        int current_cyclus = getCycleCountCallback();
+        int max_cyclus = cyclusMaxCallback();
+        if (max_cyclus == 0) {
+            snprintf(cyclus_text, sizeof(cyclus_text), "Cycli: %d/inf", current_cyclus);
+        } else {
+            snprintf(cyclus_text, sizeof(cyclus_text), "Cycli: %d/%d", current_cyclus, max_cyclus);
+        }
+        lv_label_set_text(text_label_cyclus, cyclus_text);
+    }
+    
+    // Update status
+    if (text_label_status != nullptr) {
+        const char* status_suffix = "";
+        if (isSafetyCoolingCallback && isSafetyCoolingCallback()) {
+            status_suffix = "Veiligheidskoeling";
+        } else if (isSystemOffCallback && isSystemOffCallback()) {
+            status_suffix = "Uit";
+        } else if (isActiveCallback && isActiveCallback()) {
+            if (isHeatingCallback && isHeatingCallback()) {
+                status_suffix = "Verwarmen";
+            } else {
+                status_suffix = "Koelen";
+            }
+        } else {
+            status_suffix = "Gereed";
+        }
+        char status_text[64];
+        snprintf(status_text, sizeof(status_text), "Status: %s", status_suffix);
+        lv_label_set_text(text_label_status, status_text);
+    }
+    
+    // Update temperatuur instellingen
+    if (text_label_t_top != nullptr && ttopCallback) {
+        char t_top_text[32];
+        float t_top = ttopCallback();
+        snprintf(t_top_text, sizeof(t_top_text), "Top: %.1f°C", t_top);
+        lv_label_set_text(text_label_t_top, t_top_text);
+    }
+    
+    if (text_label_t_bottom != nullptr && tbottomCallback) {
+        char t_bottom_text[32];
+        float t_bottom = tbottomCallback();
+        snprintf(t_bottom_text, sizeof(t_bottom_text), "Dal: %.1f°C", t_bottom);
+        lv_label_set_text(text_label_t_bottom, t_bottom_text);
+    }
+    
+    // Update timer weergaven
+    if (isActiveCallback && isHeatingCallback && getHeatingElapsedCallback && getCoolingElapsedCallback) {
+        bool active = isActiveCallback();
+        bool heating = isHeatingCallback();
+        
+        if (active && heating) {
+            // We zijn aan het verwarmen
+            unsigned long verwarmen_verstreken = getHeatingElapsedCallback();
+            char tijd_str[16];
+            formatTijdChar(verwarmen_verstreken, tijd_str, sizeof(tijd_str));
+            char verwarmen_text[32];
+            snprintf(verwarmen_text, sizeof(verwarmen_text), "Opwarmen: %s", tijd_str);
+            if (text_label_verwarmen_tijd != nullptr) {
+                lv_label_set_text(text_label_verwarmen_tijd, verwarmen_text);
+            }
+            // Zet koelen timer op 0:00 tijdens verwarmen
+            if (text_label_koelen_tijd != nullptr) {
+                lv_label_set_text(text_label_koelen_tijd, "Afkoelen: 0:00");
+            }
+        } else if (active && !heating) {
+            // We zijn aan het koelen
+            unsigned long koelen_verstreken = getCoolingElapsedCallback();
+            char tijd_str[16];
+            formatTijdChar(koelen_verstreken, tijd_str, sizeof(tijd_str));
+            char koelen_text[32];
+            snprintf(koelen_text, sizeof(koelen_text), "Afkoelen: %s", tijd_str);
+            if (text_label_koelen_tijd != nullptr) {
+                lv_label_set_text(text_label_koelen_tijd, koelen_text);
+            }
+            // Zet verwarmen timer op 0:00 tijdens koelen
+            if (text_label_verwarmen_tijd != nullptr) {
+                lv_label_set_text(text_label_verwarmen_tijd, "Opwarmen: 0:00");
+            }
+        } else {
+            // Geen actieve fase of timer niet gestart
+            if (text_label_verwarmen_tijd != nullptr) {
+                lv_label_set_text(text_label_verwarmen_tijd, "Opwarmen: 0:00");
+            }
+            if (text_label_koelen_tijd != nullptr) {
+                lv_label_set_text(text_label_koelen_tijd, "Afkoelen: 0:00");
+            }
+        }
+    }
+    
+    // Update knop kleuren op basis van systeemstatus
+    if (btn_start != nullptr && btn_stop != nullptr) {
+        if (isSafetyCoolingCallback && isSafetyCoolingCallback()) {
+            // Veiligheidskoeling: beide knoppen grijs (geen bediening mogelijk)
+            lv_obj_set_style_bg_color(btn_start, lv_color_hex(0x808080), LV_PART_MAIN); // Grey
+            lv_obj_set_style_bg_color(btn_stop, lv_color_hex(0x808080), LV_PART_MAIN);  // Grey
+        } else if (isActiveCallback && isSystemOffCallback && 
+                   isActiveCallback() && !isSystemOffCallback()) {
+            // Systeem actief: START grijs, STOP rood
+            lv_obj_set_style_bg_color(btn_start, lv_color_hex(0x808080), LV_PART_MAIN); // Grey
+            lv_obj_set_style_bg_color(btn_stop, lv_color_hex(0xAA0000), LV_PART_MAIN);  // Red
+        } else {
+            // Systeem niet actief: START groen, STOP grijs
+            lv_obj_set_style_bg_color(btn_start, lv_color_hex(0x00AA00), LV_PART_MAIN); // Green
+            lv_obj_set_style_bg_color(btn_stop, lv_color_hex(0x808080), LV_PART_MAIN);  // Grey
+        }
+    }
 }
 
 void UIController::logGraphData() {
-    // Placeholder - wordt later geïmplementeerd
+    // Null pointer check voor arrays
+    if (graph_temps == nullptr || graph_times == nullptr) {
+        return;
+    }
+    
+    // Log zolang er nog activiteit is: tijdens cyclus OF tijdens veiligheidskoeling
+    // BELANGRIJK: Grafiek moet continu blijven van START tot systeem UIT
+    if (!isActiveCallback || !isSafetyCoolingCallback) {
+        return; // Callbacks niet ingesteld
+    }
+    
+    bool active = isActiveCallback();
+    bool safetyCooling = isSafetyCoolingCallback();
+    
+    if (!active && !safetyCooling) {
+        return; // Geen actieve cyclus of veiligheidskoeling - geen logging
+    }
+    
+    // Log temperatuur data elke 5 seconden
+    unsigned long now = millis();
+    
+    // BELANGRIJK: Gebruik mediaan temperatuur voor grafiek (net zoals statusovergangen)
+    float temp_for_graph = getMedianTempCallback ? getMedianTempCallback() : NAN;
+    
+    // Accepteer alle waarden behalve NAN (ook 0.0 is geldig)
+    bool valid_temp = !isnan(temp_for_graph) && temp_for_graph >= -50.0 && temp_for_graph <= 350.0;
+    
+    // BELANGRIJK: graph_last_log_time wordt alleen gereset bij START, niet bij cyclus overgangen
+    if (valid_temp && (now - graph_last_log_time >= TEMP_GRAPH_LOG_INTERVAL_MS)) {
+        // EENVOUDIGE CIRCULAIRE ARRAY: Schrijf naar graph_write_index
+        graph_temps[graph_write_index] = temp_for_graph;
+        graph_times[graph_write_index] = now;
+        
+        // Update write index (wrapt automatisch rond)
+        graph_write_index = (graph_write_index + 1) % GRAPH_POINTS;
+        
+        // Update count (max 120)
+        if (graph_count < GRAPH_POINTS) {
+            graph_count++;
+        }
+        
+        // Markeer data als ready zodra eerste punt is geschreven
+        graph_data_ready = true;
+        
+        // Update timer alleen na succesvolle opslag
+        graph_last_log_time = now;
+        
+        // REAL-TIME UPDATE: Als grafiek scherm actief is, update direct
+        if (lv_scr_act() == screen_graph) {
+            updateGraph();
+        }
+    } else if (!valid_temp && (now - graph_last_log_time >= TEMP_GRAPH_LOG_INTERVAL_MS)) {
+        // Temperatuur is ongeldig, maar tijd is verstreken
+        // Update graph_last_log_time om te voorkomen dat de functie blijft proberen
+        graph_last_log_time = now;
+    }
 }
 
 void UIController::onStartButton() {
@@ -183,7 +362,14 @@ void UIController::hideInitStatus() {
 }
 
 void UIController::showWifiStatus(const char* message, bool isError) {
-    // Placeholder - wordt later geïmplementeerd
+    if (wifi_status_label == nullptr) return;
+    
+    lv_label_set_text(wifi_status_label, message);
+    if (isError) {
+        lv_obj_set_style_text_color(wifi_status_label, lv_color_hex(0xCC0000), LV_PART_MAIN); // Rood voor fout
+    } else {
+        lv_obj_set_style_text_color(wifi_status_label, lv_color_hex(0x888888), LV_PART_MAIN); // Grijs voor succes
+    }
 }
 
 void UIController::showGSStatus(const char* message, bool isError) {
@@ -191,15 +377,58 @@ void UIController::showGSStatus(const char* message, bool isError) {
 }
 
 void UIController::showGSSuccessCheckmark() {
-    // Placeholder - wordt later geïmplementeerd
+    if (gs_status_label == nullptr) return;
+    
+    // Vervang "GEREED" door "LOGGING" in de status tekst
+    char text_with_logging[128];
+    strncpy(text_with_logging, last_gs_status_text, sizeof(text_with_logging) - 1);
+    text_with_logging[sizeof(text_with_logging) - 1] = '\0';
+    
+    // Vervang "GEREED" door "LOGGING"
+    char* gereed_pos = strstr(text_with_logging, "GEREED");
+    if (gereed_pos != nullptr) {
+        size_t gereed_pos_offset = gereed_pos - text_with_logging;
+        if (gereed_pos_offset + 7 < sizeof(text_with_logging)) {
+            strncpy(gereed_pos, "LOGGING", 7);
+            gereed_pos[7] = '\0';
+        }
+    }
+    lv_label_set_text(gs_status_label, text_with_logging);
+    lv_obj_set_style_text_color(gs_status_label, lv_color_hex(0x00AA00), LV_PART_MAIN); // Groen voor LOGGING tekst
 }
 
 void UIController::setButtonsGray() {
-    // Placeholder - wordt later geïmplementeerd
+    uint32_t gray_color = 0x808080; // Grijs
+    
+    if (btn_temp_minus != nullptr) lv_obj_set_style_bg_color(btn_temp_minus, lv_color_hex(gray_color), LV_PART_MAIN);
+    if (btn_temp_plus != nullptr) lv_obj_set_style_bg_color(btn_temp_plus, lv_color_hex(gray_color), LV_PART_MAIN);
+    if (btn_t_top_minus != nullptr) lv_obj_set_style_bg_color(btn_t_top_minus, lv_color_hex(gray_color), LV_PART_MAIN);
+    if (btn_t_top_plus != nullptr) lv_obj_set_style_bg_color(btn_t_top_plus, lv_color_hex(gray_color), LV_PART_MAIN);
+    if (btn_t_bottom_minus != nullptr) lv_obj_set_style_bg_color(btn_t_bottom_minus, lv_color_hex(gray_color), LV_PART_MAIN);
+    if (btn_t_bottom_plus != nullptr) lv_obj_set_style_bg_color(btn_t_bottom_plus, lv_color_hex(gray_color), LV_PART_MAIN);
+    if (btn_start != nullptr) lv_obj_set_style_bg_color(btn_start, lv_color_hex(gray_color), LV_PART_MAIN);
+    if (btn_graph != nullptr) lv_obj_set_style_bg_color(btn_graph, lv_color_hex(gray_color), LV_PART_MAIN);
+    
+    // Force direct update voor betere responsiviteit
+    lv_task_handler();
+    delay(10);
+    lv_task_handler();
 }
 
 void UIController::setButtonsNormal() {
-    // Placeholder - wordt later geïmplementeerd
+    if (btn_temp_minus != nullptr) lv_obj_set_style_bg_color(btn_temp_minus, lv_color_hex(0x0066CC), LV_PART_MAIN); // Blauw
+    if (btn_temp_plus != nullptr) lv_obj_set_style_bg_color(btn_temp_plus, lv_color_hex(0x0066CC), LV_PART_MAIN); // Blauw
+    if (btn_t_top_minus != nullptr) lv_obj_set_style_bg_color(btn_t_top_minus, lv_color_hex(0x0066CC), LV_PART_MAIN); // Blauw
+    if (btn_t_top_plus != nullptr) lv_obj_set_style_bg_color(btn_t_top_plus, lv_color_hex(0x0066CC), LV_PART_MAIN); // Blauw
+    if (btn_t_bottom_minus != nullptr) lv_obj_set_style_bg_color(btn_t_bottom_minus, lv_color_hex(0x0066CC), LV_PART_MAIN); // Blauw
+    if (btn_t_bottom_plus != nullptr) lv_obj_set_style_bg_color(btn_t_bottom_plus, lv_color_hex(0x0066CC), LV_PART_MAIN); // Blauw
+    if (btn_start != nullptr) lv_obj_set_style_bg_color(btn_start, lv_color_hex(0x00AA00), LV_PART_MAIN); // Groen
+    if (btn_graph != nullptr) lv_obj_set_style_bg_color(btn_graph, lv_color_hex(0x0066CC), LV_PART_MAIN); // Blauw
+    
+    // Force direct update voor betere responsiviteit
+    lv_task_handler();
+    delay(10);
+    lv_task_handler();
 }
 
 void UIController::setStartCallback(StartCallback cb) {
@@ -532,15 +761,222 @@ void UIController::createGraphScreen() {
 }
 
 void UIController::updateGraph() {
-    // Placeholder - wordt later geïmplementeerd
+    // Null pointer checks
+    if (chart == nullptr || chart_series_rising == nullptr || chart_series_falling == nullptr) {
+        return;
+    }
+    
+    if (graph_temps == nullptr || graph_times == nullptr) {
+        return;
+    }
+    
+    if (!graph_data_ready || graph_count == 0) {
+        return; // Nog geen data
+    }
+    
+    // Feed watchdog
+    static unsigned long last_watchdog_feed = 0;
+    if (millis() - last_watchdog_feed > 100) {
+        yield();
+        last_watchdog_feed = millis();
+    }
+    
+    // BELANGRIJK: Reset last_displayed_time bij force rebuild om nieuwe punten te kunnen tonen
+    if (graph_force_rebuild) {
+        last_displayed_time = 0; // Reset zodat fillChart alle punten toont
+    }
+    
+    if (graph_force_rebuild || last_displayed_time == 0) {
+        fillChart();
+        // Bepaal tijd van nieuwste punt voor volgende update
+        unsigned long max_time = 0;
+        int points_to_check = (graph_count < GRAPH_POINTS) ? graph_count : GRAPH_POINTS;
+        int start_index = (graph_count < GRAPH_POINTS) ? 0 : graph_write_index;
+        for (int j = 0; j < points_to_check; j++) {
+            int i = (start_index + j) % GRAPH_POINTS;
+            if (i >= 0 && i < GRAPH_POINTS && graph_times[i] > max_time) {
+                max_time = graph_times[i];
+            }
+        }
+        if (max_time > 0) {
+            last_displayed_time = max_time;
+        } else {
+            last_displayed_time = 0;
+        }
+        graph_force_rebuild = false; // Reset flag
+        return;
+    }
+    
+    // Continue update: voeg alle nieuwe punten toe sinds laatste update
+    int points_to_check = (graph_count < GRAPH_POINTS) ? graph_count : GRAPH_POINTS;
+    int start_index = (graph_count < GRAPH_POINTS) ? 0 : graph_write_index;
+    int points_added = 0;
+    unsigned long newest_time = last_displayed_time;
+    
+    // Haal T_top op via callback
+    float max_temp = ttopCallback ? ttopCallback() : 100.0;
+    float min_temp = 20.0;
+    
+    // Loop door alle punten in chronologische volgorde (oudste eerst)
+    for (int j = 0; j < points_to_check; j++) {
+        int i = (start_index + j) % GRAPH_POINTS;
+        
+        if (i < 0 || i >= GRAPH_POINTS) break;
+        
+        // Check of dit punt nieuwer is dan laatst weergegeven
+        if (graph_times[i] == 0 || graph_times[i] <= last_displayed_time) {
+            continue; // Skip oude punten
+        }
+        
+        // Check of dit punt geldig is
+        if (isnan(graph_temps[i]) || graph_temps[i] < -50.0 || graph_temps[i] > 350.0) {
+            // Ongeldig punt: voeg leeg punt toe maar update tijd wel
+            lv_chart_set_next_value(chart, chart_series_rising, LV_CHART_POINT_NONE);
+            lv_chart_set_next_value(chart, chart_series_falling, LV_CHART_POINT_NONE);
+            if (graph_times[i] > newest_time) {
+                newest_time = graph_times[i];
+            }
+            points_added++;
+            continue;
+        }
+        
+        int chart_value = (int)(graph_temps[i] + 0.5);
+        chart_value = constrain(chart_value, (int)min_temp, (int)max_temp);
+        addChartPoint(i, graph_temps[i], chart_value);
+        
+        if (graph_times[i] > newest_time) {
+            newest_time = graph_times[i];
+        }
+        points_added++;
+        
+        if (points_added % 5 == 0) yield();
+    }
+    
+    // Update laatste weergegeven tijd
+    if (points_added > 0 && newest_time > last_displayed_time) {
+        last_displayed_time = newest_time;
+    }
 }
 
 void UIController::fillChart() {
-    // Placeholder - wordt later geïmplementeerd
+    // Null pointer checks
+    if (chart == nullptr || chart_series_rising == nullptr || chart_series_falling == nullptr) {
+        return;
+    }
+    
+    if (graph_temps == nullptr || graph_times == nullptr) {
+        return;
+    }
+    
+    if (!graph_data_ready || graph_count == 0) {
+        return; // Nog geen data
+    }
+    
+    // Wis alle punten eerst
+    clearChart();
+    
+    // Haal T_top op via callback
+    float max_temp = ttopCallback ? ttopCallback() : 100.0;
+    float min_temp = 20.0;
+    
+    // Bepaal hoeveel punten we moeten tonen
+    int points_to_show = (graph_count < GRAPH_POINTS) ? graph_count : GRAPH_POINTS;
+    
+    // Bepaal start index: als buffer nog niet vol is, begin bij 0, anders bij graph_write_index
+    int start_index = (graph_count < GRAPH_POINTS) ? 0 : graph_write_index;
+    
+    // Loop door alle punten in chronologische volgorde (oudste eerst)
+    for (int j = 0; j < points_to_show; j++) {
+        // Bereken index: begin bij start_index (oudste) en loop verder
+        int i = (start_index + j) % GRAPH_POINTS;
+        
+        if (i < 0 || i >= GRAPH_POINTS) continue;
+        
+        // Check of dit punt geldig is
+        if (graph_times[i] == 0 || isnan(graph_temps[i]) || 
+            graph_temps[i] < -50.0 || graph_temps[i] > 350.0) {
+            // Ongeldig punt: skip
+            continue;
+        }
+        
+        int chart_value = (int)(graph_temps[i] + 0.5);
+        chart_value = constrain(chart_value, (int)min_temp, (int)max_temp);
+        addChartPoint(i, graph_temps[i], chart_value);
+        
+        if (j % 10 == 0) {
+            yield(); // Feed watchdog
+            lv_task_handler(); // Laat LVGL touch events verwerken tijdens grafiek opbouw
+        }
+    }
 }
 
 void UIController::clearChart() {
-    // Placeholder - wordt later geïmplementeerd
+    if (chart == nullptr || chart_series_rising == nullptr || chart_series_falling == nullptr) {
+        return;
+    }
+    
+    // Wis alle punten door ze op LV_CHART_POINT_NONE te zetten
+    for (int i = 0; i < GRAPH_POINTS; i++) {
+        lv_chart_set_next_value(chart, chart_series_rising, LV_CHART_POINT_NONE);
+        lv_chart_set_next_value(chart, chart_series_falling, LV_CHART_POINT_NONE);
+    }
+}
+
+void UIController::addChartPoint(int index, float tempValue, int chartValue) {
+    // Null pointer check voor arrays
+    if (graph_temps == nullptr || graph_times == nullptr) {
+        return;
+    }
+    
+    // Array bounds check
+    if (index < 0 || index >= GRAPH_POINTS) {
+        return;
+    }
+    
+    // Bepaal trend: vergelijk met vorige waarde
+    bool rising = false;
+    bool has_previous = false;
+    
+    if (index > 0) {
+        // Normaal geval: vergelijk met vorige index
+        int prev_index = index - 1;
+        if (prev_index >= 0 && prev_index < GRAPH_POINTS) {
+            if (!isnan(graph_temps[prev_index]) && graph_times[prev_index] > 0) {
+                rising = tempValue > graph_temps[prev_index];
+                has_previous = true;
+            }
+        }
+    } else if (graph_count >= GRAPH_POINTS) {
+        // Bij wrap-around (buffer vol): vergelijk met laatste punt in buffer
+        int prev_index = (graph_write_index - 1 + GRAPH_POINTS) % GRAPH_POINTS;
+        if (prev_index >= 0 && prev_index < GRAPH_POINTS) {
+            if (!isnan(graph_temps[prev_index]) && graph_times[prev_index] > 0) {
+                rising = tempValue > graph_temps[prev_index];
+                has_previous = true;
+            }
+        }
+    }
+    
+    // Als er geen vorige waarde is (eerste punt), gebruik blauw als default
+    if (!has_previous) {
+        rising = false; // Eerste punt = blauw
+    }
+    
+    // Null check voor chart objecten
+    if (chart == nullptr || chart_series_rising == nullptr || chart_series_falling == nullptr) {
+        return;
+    }
+    
+    // Voeg punt toe aan juiste series, zet andere op LV_CHART_POINT_NONE
+    if (rising) {
+        // Stijgende temperatuur -> rood
+        lv_chart_set_next_value(chart, chart_series_rising, chartValue);
+        lv_chart_set_next_value(chart, chart_series_falling, LV_CHART_POINT_NONE);
+    } else {
+        // Dalende temperatuur (of gelijk, of eerste punt) -> blauw
+        lv_chart_set_next_value(chart, chart_series_rising, LV_CHART_POINT_NONE);
+        lv_chart_set_next_value(chart, chart_series_falling, chartValue);
+    }
 }
 
 bool UIController::allocateBuffers() {
