@@ -1,5 +1,5 @@
-#ifndef WEBSERVER_H
-#define WEBSERVER_H
+#ifndef CONFIGWEBSERVER_H
+#define CONFIGWEBSERVER_H
 
 #include <WebServer.h>
 #include <Arduino.h>
@@ -88,5 +88,5 @@ private:
     String generateStatusJSON();
 };
 
-#endif // WEBSERVER_H
+#endif // CONFIGWEBSERVER_H
 

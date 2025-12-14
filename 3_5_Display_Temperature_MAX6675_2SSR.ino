@@ -67,6 +67,7 @@
 #include "src/Logger/Logger.h"
 #include "src/CycleController/CycleController.h"
 #include "src/UIController/UIController.h"
+// Include WebServer.h moet NA andere includes om naamconflict te voorkomen
 #include "src/WebServer/WebServer.h"
 /* --- Rob Tillaart MAX6675 (software SPI) ---
    Constructor order (since v0.2.0): MAX6675(select, miso, clock)
