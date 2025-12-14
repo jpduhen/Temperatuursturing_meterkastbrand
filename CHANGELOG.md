@@ -2,7 +2,81 @@
 
 Dit document bevat een overzicht van alle wijzigingen per versie. Dit helpt bij het verder ontwikkelen op verschillende computers.
 
-## Versie 3.85 (Huidige versie)
+## Versie 3.91 (Huidige versie)
+
+**Refactoring - Logger Module Integratie:**
+- Logger module geïntegreerd in hoofdprogramma
+- `logToGoogleSheet()` gebruikt nu `logger.log()` in plaats van directe queue access
+- `logToGoogleSheet_internal()` en `loggingTask()` verwijderd (vervangen door Logger module)
+- Logger initialisatie toegevoegd in `setup()` met token authenticatie
+- Globale variabelen `g_logSuccessFlag` en `g_logSuccessTime` bijgewerkt vanuit Logger module
+- FreeRTOS task creatie verplaatst naar Logger module (stack size verhoogd naar 16384 bytes)
+- `getLogSuccessTime()` methode toegevoegd aan Logger voor backward compatibility
+
+## Versie 3.90
+
+**Refactoring - Logger Module Implementatie:**
+- Logger module volledig geïmplementeerd met FreeRTOS task en Google Sheets integratie
+- Logger header en implementatie aangemaakt met alle originele logica
+- FreeRTOS queue management, rate limiting, en retry mechanisme behouden
+- Google Sheets API calls met FirebaseJson en watchdog feeding behouden
+
+---
+
+## Versie 3.89
+
+**Refactoring - TempSensor Module Integratie:**
+- TempSensor module geïntegreerd in hoofdprogramma
+- Alle temp sensor functies vervangen door TempSensor method calls
+- `readTempC_single()`, `readTempC()`, `readTempC_critical()` wrappers verwijderd
+- `getMedianTemp()` en `getCriticalTemp()` wrappers gebruiken nu TempSensor
+- `sampleMax6675()` vervangen door `tempSensor.sample()`
+- Globale variabelen worden bijgewerkt vanuit TempSensor voor backward compatibility
+- `tempSensor.begin()` en `tempSensor.setOffset()` toegevoegd in setup/loadSettings
+- `read()` functie public gemaakt voor gebruik in warm-up code
+
+---
+
+## Versie 3.88
+
+**Refactoring - TempSensor Module Implementatie:**
+- TempSensor module volledig geïmplementeerd met alle originele logica
+- `readSingle()`, `read()`, `readCritical()` functies overgenomen
+- `calculateMedian()` met insertion sort voor mediaan berekening
+- `sample()` met circulaire array voor median filtering
+- Open circuit detectie en data validatie behouden
+- Retry mechanisme en majority voting voor kritieke metingen behouden
+- Chronologische volgorde voor mediaan berekening behouden
+- Alle getters geïmplementeerd: `getCurrent()`, `getMedian()`, `getCritical()`, `getLastValid()`
+
+---
+
+## Versie 3.87
+
+**Refactoring - SettingsStore Module:**
+- SettingsStore module geïmplementeerd en geïntegreerd in hoofdprogramma
+- `loadSettings()` en `saveSettings()` vervangen door `settingsStore.load()` en `settingsStore.save()`
+- T_top validatie tegen TEMP_MAX behouden in SettingsStore module
+- Globale Preferences variabelen verplaatst naar SettingsStore module
+- Settings struct toegevoegd voor type-safe settings management
+- Backward compatibility behouden: oude functies blijven als wrappers
+
+---
+
+## Versie 3.86
+
+**Refactoring Start - SystemClock Module:**
+- Modulaire architectuur refactoring gestart volgens REFACTORING_PLAN.md
+- SystemClock module geïmplementeerd en geïntegreerd in hoofdprogramma
+- `getTimestampChar()` en `getTimestampFromMillisChar()` vervangen door `systemClock.getTimestamp()` en `systemClock.getTimestampFromMillis()`
+- NTP synchronisatie code in `setup()` vervangen door `systemClock.begin()` en `systemClock.sync()`
+- Globale variabelen `ntp_sync_time_ms` en `ntp_sync_unix_time` verplaatst naar SystemClock module
+- Project structuur aangemaakt voor alle 6 modules (SystemClock, SettingsStore, TempSensor, Logger, CycleController, UIController)
+- Alle module headers en placeholder implementaties aangemaakt
+
+---
+
+## Versie 3.85
 
 **Temperatuur Stagnatie Beveiliging - Losse Thermokoppel Detectie:**
 - Beveiliging toegevoegd die detecteert wanneer temperatuur te lang constant blijft (losse thermokoppel)

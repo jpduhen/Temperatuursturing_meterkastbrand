@@ -1,4 +1,4 @@
-/*  versie 3.85
+/*  versie 3.91
     Jan Pieter Duhen
     Meterkastbrand onderzoek: Kooiklem maximaaltest
 
@@ -61,6 +61,12 @@
 #include <freertos/queue.h>
 #include <Preferences.h>  // Voor opslag van instellingen in non-volatile memory
 #include <MAX6675.h>
+#include "src/SystemClock/SystemClock.h"
+#include "src/SettingsStore/SettingsStore.h"
+#include "src/TempSensor/TempSensor.h"
+#include "src/Logger/Logger.h"
+#include "src/CycleController/CycleController.h"
+#include "src/UIController/UIController.h"
 /* --- Rob Tillaart MAX6675 (software SPI) ---
    Constructor order (since v0.2.0): MAX6675(select, miso, clock)
    Our pins: CS=21, SO(MISO)=35, SCK=22
@@ -75,7 +81,7 @@
 
 // Versienummer - VERHOOG BIJ ELKE WIJZIGING
 #define FIRMWARE_VERSION_MAJOR 3
-#define FIRMWARE_VERSION_MINOR 85
+#define FIRMWARE_VERSION_MINOR 92
 
 // Temperatuur constanten
 #define TEMP_SAFE_THRESHOLD 37.0        // Temperatuur grens voor veilig aanraken (groen < 37°C, rood >= 37°C)
@@ -106,50 +112,22 @@
 
 MAX6675 thermocouple(MAX6675_CS, MAX6675_SO, MAX6675_SCK);
 
+// Module instanties
+SystemClock systemClock;
+SettingsStore settingsStore;
+TempSensor tempSensor(MAX6675_CS, MAX6675_SO, MAX6675_SCK);
+Logger logger;
+CycleController cycleController;
+UIController uiController;
+
 // Kalibratie offset voor MAX6675 (wordt geladen uit Preferences)
 float temp_offset = 0.0; // Kalibratie offset in °C
 
 // Timer voor conversietijd respectering
 static unsigned long g_lastMax6675ReadTime = 0;
 
-// Interne functie voor één enkele MAX6675 read (zonder retry)
-// Respecteert conversietijd en controleert status bits
-static float readTempC_single() {
-  // Respecteer conversietijd van MAX6675 (220ms typisch)
-  // Voorkomt onstabiele metingen door te snelle opeenvolgende reads
-  unsigned long now = millis();
-  if (g_lastMax6675ReadTime > 0 && (now - g_lastMax6675ReadTime) < MAX6675_CONVERSION_TIME_MS) {
-    return NAN; // Te snel na vorige read - conversie nog niet klaar
-  }
-  
-  uint8_t state = thermocouple.read();
-  g_lastMax6675ReadTime = now;
-  
-  if (state == 0) { // STATUS_OK
-    // Controleer op open circuit (bit 2 in status)
-    // De library zet bit 2 als thermocouple open circuit is
-    uint8_t status = thermocouple.getStatus();
-    if (status & 0x04) {
-      // Thermocouple open circuit gedetecteerd
-      // Return NAN om aan te geven dat meting ongeldig is
-      return NAN;
-    }
-    
-    float temp = thermocouple.getCelsius();
-    
-    // Data validatie - controleer op onrealistische waarden
-    // K-type thermocouple bereik: -200°C tot 1200°C
-    if (temp < -200.0 || temp > 1200.0) {
-      return NAN; // Onrealistische waarde - waarschijnlijk corrupte data
-    }
-    
-    // Pas kalibratie offset toe (wordt automatisch toegepast door library via setOffset)
-    return temp;
-  }
-  
-  // STATUS_ERROR of andere fout
-  return NAN;
-}
+// VERPLAATST NAAR TempSensor module - functie verwijderd, gebruik tempSensor.getCurrent() of tempSensor.getMedian()
+// readTempC_single() wordt niet meer gebruikt - alle aanroepen zijn vervangen
 
 // Mediaan berekening constanten
 #define TEMP_MEDIAN_SAMPLES 7              // Aantal metingen voor mediaan (7 waarden)
@@ -195,64 +173,11 @@ static float calculateMedianFromArray(float* samples, int count) {
   }
 }
 
-// MAX6675 temperatuurmeting met retry mechanisme voor betere robuustheid
-static float readTempC() {
-  float temp = NAN;
-  
-  // Probeer MAX6675_READ_RETRIES keer bij tijdelijke fouten
-  for (int i = 0; i < MAX6675_READ_RETRIES; i++) {
-    temp = readTempC_single();
-    
-    // Als we een geldige meting hebben, return direct
-    if (!isnan(temp)) {
-      return temp;
-    }
-    
-    // Bij fout: wacht kort en probeer opnieuw (behalve laatste poging)
-    if (i < (MAX6675_READ_RETRIES - 1)) {
-      delay(MAX6675_RETRY_DELAY_MS);
-    }
-  }
-  
-  // Alle retries gefaald - return NAN
-  return NAN;
-}
+// VERPLAATST NAAR TempSensor module - functie verwijderd, gebruik tempSensor.getCurrent() of tempSensor.getMedian()
+// readTempC() wordt niet meer gebruikt - alle aanroepen zijn vervangen door tempSensor.sample()
 
-// MAX6675 temperatuurmeting met majority voting voor KRITIEKE metingen
-// Gebruik deze functie voor kritieke beslissingen zoals faseovergangen (T_top/T_bottom checks)
-// Duurt ~90ms (3 samples * 30ms) - gebruik alleen waar nodig
-static float readTempC_critical() {
-  float samples[MAX6675_CRITICAL_SAMPLES];
-  int valid_count = 0;
-  
-  // Doe meerdere reads met delay tussen samples
-  for (int i = 0; i < MAX6675_CRITICAL_SAMPLES; i++) {
-    float temp = readTempC(); // Gebruik normale read met retry
-    
-    if (!isnan(temp)) {
-      samples[valid_count++] = temp;
-    }
-    
-    // Wacht tussen samples (behalve laatste) - gebruik yield() + lv_task_handler() voor responsiviteit
-    if (i < (MAX6675_CRITICAL_SAMPLES - 1)) {
-      unsigned long delay_start = millis();
-      while (millis() - delay_start < MAX6675_CRITICAL_SAMPLE_DELAY_MS) {
-        yield(); // Feed watchdog
-        lv_task_handler(); // Laat LVGL touch events verwerken
-        delay(1); // Korte delay om CPU niet te overbelasten
-      }
-    }
-  }
-  
-  // Als we minder dan 2 geldige samples hebben, return NAN (niet betrouwbaar)
-  // Verlaagd van 3 naar 2 voor snellere respons (met 3 samples is 2 voldoende)
-  if (valid_count < 2) {
-    return NAN;
-  }
-  
-  // Bereken mediaan van geldige samples
-  return calculateMedianFromArray(samples, valid_count);
-}
+// VERPLAATST NAAR TempSensor module - functie verwijderd, gebruik tempSensor.getCritical()
+// readTempC_critical() wordt niet meer gebruikt - alle aanroepen zijn vervangen door tempSensor.getCritical()
 
 // Temperature cache (updated in loop)
 volatile float g_currentTempC = NAN;
@@ -306,8 +231,7 @@ unsigned long stagnatie_start_tijd = 0; // Starttijd wanneer temperatuur binnen 
 #define TEMP_STAGNATIE_BANDWIDTH 3.0 // Bandbreedte voor stagnatie detectie (graden)
 #define TEMP_STAGNATIE_TIJD_MS (2 * 60 * 1000) // 2 minuten stagnatie tijd
 // NTP offset voor timestamp berekening (millis() -> Unix tijd)
-unsigned long ntp_sync_time_ms = 0; // millis() waarde toen NTP gesynchroniseerd werd
-time_t ntp_sync_unix_time = 0; // Unix tijd toen NTP gesynchroniseerd werd
+// VERPLAATST NAAR SystemClock module
 
 // Grafiek data - EENVOUDIGE CIRCULAIRE ARRAY
 #define GRAPH_POINTS 120  // Aantal data punten in grafiek
@@ -340,75 +264,50 @@ bool g_googleAuthTokenReady = false;
 #define LOG_FASE_TIJD_MAX_LEN 10
 #define LOG_CYCLUS_TIJD_MAX_LEN 10
 
-// Struct voor logging data (alleen POD types voor queue)
-typedef struct {
-  char status[LOG_STATUS_MAX_LEN];
-  float temp;
-  int cyclus_teller;
-  int cyclus_max;
-  float T_top;
-  float T_bottom;
-  char fase_tijd[LOG_FASE_TIJD_MAX_LEN];
-  char cyclus_tijd[LOG_CYCLUS_TIJD_MAX_LEN]; // Totaaltijd van volledige cyclus (opwarmen + afkoelen)
-  unsigned long timestamp_ms; // Timestamp in milliseconden (voor correcte timestamp bij fase wijziging)
-} LogRequest;
+// VERPLAATST NAAR Logger module - LogRequest struct is nu in Logger.h gedefinieerd
+// Gebruik LogRequest uit Logger.h (via #include "src/Logger/Logger.h")
 
 QueueHandle_t logQueue = nullptr;
 TaskHandle_t loggingTaskHandle = nullptr;
 
-// Interne logging functie (wordt aangeroepen door logging task op Core 1)
-void logToGoogleSheet_internal(const LogRequest* req);
+// VERPLAATST NAAR Logger module - forward declaration verwijderd
 
 // Preferences functies voor opslag van instellingen
+// VERPLAATST NAAR SettingsStore module - functies blijven tijdelijk voor backward compatibility
 void loadSettings() {
-  preferences.begin(PREF_NAMESPACE, false); // false = read-write mode
-  
-  // Laad T_top (default: 80.0)
-  T_top = preferences.getFloat(PREF_KEY_T_TOP, 80.0);
-  // BELANGRIJK: Valideer T_top tegen TEMP_MAX (kan verhoogd zijn in nieuwe firmware)
-  // Gebruik >= i.p.v. > om floating point problemen te voorkomen
-  if (T_top >= TEMP_MAX) {
-    T_top = TEMP_MAX;
-    // Sla gecorrigeerde waarde op
-    preferences.putFloat(PREF_KEY_T_TOP, T_top);
-  }
-  
-  // Laad T_bottom (default: 25.0)
-  T_bottom = preferences.getFloat(PREF_KEY_T_BOTTOM, 25.0);
-  
-  // Laad cyclus_max (default: 0 = oneindig)
-  cyclus_max = preferences.getInt(PREF_KEY_CYCLUS_MAX, 0);
-  
-  // Laad temperatuur kalibratie offset (default: 0.0)
-  temp_offset = preferences.getFloat(PREF_KEY_TEMP_OFFSET, 0.0);
-  // Pas offset toe op MAX6675 library
+  Settings settings = settingsStore.load();
+  T_top = settings.tTop;
+  T_bottom = settings.tBottom;
+  cyclus_max = settings.cycleMax;
+  temp_offset = settings.tempOffset;
+  // Pas offset toe op MAX6675 library (oude instantie)
   thermocouple.setOffset(temp_offset);
+  // Pas offset toe op TempSensor module
+  tempSensor.setOffset(temp_offset);
   
-  preferences.end();
+  // Update CycleController settings (als al geïnitialiseerd)
+  if (cycleController.isActive() || true) { // Altijd updaten (CycleController kan al geïnitialiseerd zijn)
+    cycleController.setTargetTop(T_top);
+    cycleController.setTargetBottom(T_bottom);
+    cycleController.setMaxCycles(cyclus_max);
+  }
 }
 
 void saveSettings() {
-  preferences.begin(PREF_NAMESPACE, false); // false = read-write mode
-  
-  // Sla T_top op
-  preferences.putFloat(PREF_KEY_T_TOP, T_top);
-  
-  // Sla T_bottom op
-  preferences.putFloat(PREF_KEY_T_BOTTOM, T_bottom);
-  
-  // Sla cyclus_max op
-  preferences.putInt(PREF_KEY_CYCLUS_MAX, cyclus_max);
-  
-  // Sla temperatuur kalibratie offset op
-  preferences.putFloat(PREF_KEY_TEMP_OFFSET, temp_offset);
-  
-  preferences.end();
+  Settings settings;
+  settings.tTop = T_top;
+  settings.tBottom = T_bottom;
+  settings.cycleMax = cyclus_max;
+  settings.tempOffset = temp_offset;
+  settingsStore.save(settings);
 }
 
 // Token status callback functie
+// VERPLAATST NAAR Logger module - functie blijft tijdelijk voor backward compatibility
 static void gs_tokenStatusCallback(TokenInfo info) {
+  // Logger module handelt dit nu af
   if (info.status == token_status_ready) {
-    g_googleAuthTokenReady = true;
+    g_googleAuthTokenReady = true; // Update globale variabele voor backward compatibility
   }
 }
 
@@ -524,69 +423,19 @@ void init_graph_data() {
   graph_last_log_time = 0;
 }
 
-// Haal mediaan temperatuur op
-// Vereenvoudigd: g_avgTempC wordt altijd bijgewerkt in sampleMax6675() met correcte chronologische volgorde
+// VERPLAATST NAAR TempSensor module - functie blijft tijdelijk voor backward compatibility
 static float getMedianTemp() {
-  // Gebruik de al berekende mediaan (wordt elke 285ms bijgewerkt in sampleMax6675())
-  if (!isnan(g_avgTempC)) {
-    return g_avgTempC;
-  }
-  
-  // Fallback: gebruik laatste meting als mediaan nog niet beschikbaar is
-  return g_currentTempC;
+  return tempSensor.getMedian();
 }
 
-// Sample MAX6675 temperatuur (aanroepen vanuit loop())
-// Nieuwe aanpak: elke 285ms een nieuwe waarde toevoegen aan circulaire array
-// Mediaan wordt berekend en gebruikt voor display en logging
+// VERPLAATST NAAR TempSensor module - functie blijft tijdelijk voor backward compatibility
 static void sampleMax6675()
 {
-  unsigned long now = millis();
-  if (now - g_lastSampleMs < TEMP_SAMPLE_INTERVAL_MS) return;
-  g_lastSampleMs = now;
-  
-  float t = readTempC();
-  if (!isnan(t) && t > -200 && t < 1200) { // sanity window for K-type + MAX6675
-    // Voeg nieuwe waarde toe aan circulaire array (oudste valt automatisch af)
-    g_tempSamples[g_tempSampleIndex] = t;
-    g_tempSampleIndex = (g_tempSampleIndex + 1) % TEMP_MEDIAN_SAMPLES;
-    
-    // Update aantal geldige metingen (max 7)
-    if (g_tempSampleCount < TEMP_MEDIAN_SAMPLES) {
-      g_tempSampleCount++;
-    }
-    
-    // Kopieer waarden uit circulaire array in chronologische volgorde (oudste eerst)
-    // Dit is nodig omdat de circulaire array wrapt en de volgorde niet chronologisch is
-    float chrono_samples[TEMP_MEDIAN_SAMPLES];
-    int count_to_use = (g_tempSampleCount >= TEMP_MEDIAN_SAMPLES) ? TEMP_MEDIAN_SAMPLES : g_tempSampleCount;
-    
-    // g_tempSampleIndex wijst naar de volgende positie (waar de volgende meting komt)
-    // We moeten de laatste count_to_use metingen pakken in chronologische volgorde
-    for (int i = 0; i < count_to_use; i++) {
-      // Start vanaf de oudste meting en werk vooruit
-      // Bij circulaire buffer: als index 3 is en count 7, dan zijn de metingen op posities:
-      // (3-7+7)%7=3, (3-6+7)%7=4, (3-5+7)%7=5, (3-4+7)%7=6, (3-3+7)%7=0, (3-2+7)%7=1, (3-1+7)%7=2
-      int idx = (g_tempSampleIndex - count_to_use + i + TEMP_MEDIAN_SAMPLES) % TEMP_MEDIAN_SAMPLES;
-      chrono_samples[i] = g_tempSamples[idx];
-    }
-    
-    // Bereken mediaan van de waarden in chronologische volgorde
-    if (count_to_use >= TEMP_MEDIAN_SAMPLES) {
-      // Array is vol - bereken mediaan van alle 7 waarden
-      g_avgTempC = calculateMedianFromArray(chrono_samples, TEMP_MEDIAN_SAMPLES);
-    } else if (count_to_use >= 2) {
-      // Minimaal 2 waarden nodig voor mediaan
-      g_avgTempC = calculateMedianFromArray(chrono_samples, count_to_use);
-    } else {
-      // Nog niet genoeg waarden - gebruik laatste meting
-      g_avgTempC = t;
-    }
-    
-    // Update huidige temperatuur en laatste geldige waarde
-    g_currentTempC = g_avgTempC; // Gebruik mediaan als huidige waarde
-    g_lastValidTempC = g_avgTempC; // Bewaar voor display bij fouten
-  }
+  tempSensor.sample();
+  // Update globale variabelen voor backward compatibility
+  g_currentTempC = tempSensor.getCurrent();
+  g_avgTempC = tempSensor.getMedian();
+  g_lastValidTempC = tempSensor.getLastValid();
 }
 
 // Relais besturingsfuncties (Solid State Relais - alleen NO contact)
@@ -652,123 +501,26 @@ static void resetFaseTijd(char* buffer, size_t buffer_size) {
 }
 
 // Helper functie voor Google Sheets timestamp (char array versie)
+// VERPLAATST NAAR SystemClock module
+// Functies worden vervangen door systemClock.getTimestamp() en systemClock.getTimestampFromMillis()
+// Oude functies blijven tijdelijk voor backward compatibility tijdens refactoring
 void getTimestampChar(char* buffer, size_t buffer_size) {
-  struct tm timeinfo;
-  if (!getLocalTime(&timeinfo)) {
-    strncpy(buffer, "00-00-00 00:00:00", buffer_size - 1);
-    buffer[buffer_size - 1] = '\0';
-    return;
-  }
-  
-  snprintf(buffer, buffer_size, "%02d-%02d-%02d %02d:%02d:%02d",
-           timeinfo.tm_year % 100,  // yy
-           timeinfo.tm_mon + 1,      // mm
-           timeinfo.tm_mday,         // dd
-           timeinfo.tm_hour,         // hh
-           timeinfo.tm_min,          // mm
-           timeinfo.tm_sec);         // ss
+  systemClock.getTimestamp(buffer, buffer_size);
 }
 
-// Helper functie voor timestamp op basis van millis() waarde
-// Gebruik char array versie om heap fragmentatie te voorkomen
 void getTimestampFromMillisChar(unsigned long timestamp_ms, char* buffer, size_t buffer_size) {
-  if (ntp_sync_time_ms == 0 || ntp_sync_unix_time == 0) {
-    // NTP nog niet gesynchroniseerd, gebruik huidige tijd
-    getTimestampChar(buffer, buffer_size);
-    return;
-  }
-  
-  // Bereken verschil tussen opgeslagen tijd en sync tijd
-  long diff_ms = (long)timestamp_ms - (long)ntp_sync_time_ms;
-  
-  // Converteer naar Unix tijd (seconden)
-  time_t target_time = ntp_sync_unix_time + (diff_ms / 1000);
-  
-  // Converteer naar struct tm
-  struct tm timeinfo;
-  if (!localtime_r(&target_time, &timeinfo)) {
-    getTimestampChar(buffer, buffer_size); // Fallback naar huidige tijd
-    return;
-  }
-  
-  snprintf(buffer, buffer_size, "%02d-%02d-%02d %02d:%02d:%02d",
-           timeinfo.tm_year % 100,  // yy
-           timeinfo.tm_mon + 1,      // mm
-           timeinfo.tm_mday,         // dd
-           timeinfo.tm_hour,         // hh
-           timeinfo.tm_min,          // mm
-           timeinfo.tm_sec);         // ss
+  systemClock.getTimestampFromMillis(timestamp_ms, buffer, buffer_size);
 }
 
-// FreeRTOS Task voor Google Sheets logging op Core 1
-// BELANGRIJK: Draait op Core 1 (samen met loop()) zodat Core 0 beschikbaar blijft voor real-time taken
-void loggingTask(void* parameter) {
-  LogRequest req;
-  static unsigned long last_log_time = 0;
-  const unsigned long MIN_LOG_INTERVAL_MS = 2000; // Minimaal 2 seconden tussen logs (voorkomt SSL overbelasting)
-  
-  while (true) {
-    // Wacht op logging request in queue (korte timeout voor snelle respons)
-    // Gebruik korte timeout (10ms) in plaats van 100ms voor snellere logging
-    if (xQueueReceive(logQueue, &req, pdMS_TO_TICKS(10)) == pdTRUE) {
-      // BELANGRIJK: Rate limiting om SSL overbelasting te voorkomen
-      // Wacht minimaal 2 seconden tussen logging requests
-      unsigned long now = millis();
-      unsigned long time_since_last_log = (now >= last_log_time) ? (now - last_log_time) : (ULONG_MAX - last_log_time + now);
-      
-      if (time_since_last_log < MIN_LOG_INTERVAL_MS) {
-        // Te snel na vorige log - wacht en probeer opnieuw
-        // Stuur request terug naar queue (vooraan) om later opnieuw te proberen
-        xQueueSendToFront(logQueue, &req, 0);
-        vTaskDelay(pdMS_TO_TICKS(MIN_LOG_INTERVAL_MS - time_since_last_log));
-        continue;
-      }
-      
-      // Voer logging uit
-      logToGoogleSheet_internal(&req);
-      last_log_time = millis();
-    }
-    
-    // Onderhoud Google Sheets token periodiek
-    // BELANGRIJK: Gebruik alleen non-blocking aanroep - sheet.ready() is al non-blocking
-    // Geen while loop om IDLE task niet te blokkeren (voorkomt watchdog timeout)
-    if (WiFi.status() == WL_CONNECTED && g_googleAuthTokenReady) {
-      static unsigned long last_token_refresh = 0;
-      unsigned long now = millis();
-      if (now - last_token_refresh >= 10000) { // Refresh elke 10 seconden
-        // Eén non-blocking aanroep - sheet.ready() handelt token refresh intern af
-        sheet.ready();
-        last_token_refresh = millis();
-      }
-    }
-    
-    // Korte delay om CPU niet te overbelasten, maar kort genoeg voor snelle respons
-    // Verlaagd van 50ms naar 5ms voor snellere logging
-    vTaskDelay(pdMS_TO_TICKS(5));
-  }
-}
+// VERPLAATST NAAR Logger module - functie verwijderd, Logger::task() wordt nu gebruikt
 
-// Publieke logging functie - stuurt request naar queue (niet-blokkerend)
+// Publieke logging functie - stuurt request naar Logger module (niet-blokkerend)
 void logToGoogleSheet(const char* status) {
-  // Controleer of queue bestaat
-  if (logQueue == nullptr) {
-    return; // Queue niet geïnitialiseerd, skip logging
-  }
+  // Logger module handelt queue management af
   
   // Null pointer check
   if (status == nullptr) {
     return;
-  }
-  
-  // Voorkom queue overflow - verwijder meerdere oude entries als queue vol is
-  UBaseType_t queue_count = uxQueueMessagesWaiting(logQueue);
-  if (queue_count >= LOG_QUEUE_SIZE - 1) {
-    // Verwijder meerdere oude entries om ruimte te maken
-    int removed = 0;
-    LogRequest dummy;
-    while (removed < LOG_QUEUE_CLEANUP_COUNT && xQueueReceive(logQueue, &dummy, 0) == pdTRUE) {
-      removed++;
-    }
   }
   
   // Maak logging request struct
@@ -893,166 +645,12 @@ void logToGoogleSheet(const char* status) {
   req.cyclus_tijd[LOG_CYCLUS_TIJD_MAX_LEN - 1] = '\0'; // Null-terminate
   req.timestamp_ms = log_timestamp_ms; // Sla timestamp op voor gebruik in logToGoogleSheet_internal
   
-  // Stuur naar queue (non-blocking)
-  // BELANGRIJK: Gebruik timeout om te voorkomen dat requests verloren gaan
-  // Als queue vol is, wacht kort (10ms) om ruimte te maken
-  if (logQueue != nullptr) {
-    if (xQueueSend(logQueue, &req, pdMS_TO_TICKS(10)) != pdTRUE) {
-      // Queue vol of timeout - probeer oude entries te verwijderen en opnieuw te sturen
-      LogRequest dummy;
-      int removed = 0;
-      while (removed < 3 && xQueueReceive(logQueue, &dummy, 0) == pdTRUE) {
-        removed++;
-      }
-      // Probeer opnieuw te sturen
-      xQueueSend(logQueue, &req, 0);
-    }
-  }
+  // VERPLAATST NAAR Logger module - gebruik logger.log() in plaats van direct naar queue
+  logger.log(req);
 }
 
-// Interne logging functie (uitgevoerd op Core 1 door logging task)
-void logToGoogleSheet_internal(const LogRequest* req) {
-  // BELANGRIJK: Null pointer check
-  if (req == nullptr) {
-    return;
-  }
-  
-  // Controleer WiFi verbinding
-  if (WiFi.status() != WL_CONNECTED) {
-    return;
-  }
-  
-  // Controleer Google Sheets authenticatie
-  if (!g_googleAuthTokenReady) {
-    return;
-  }
-  
-  // Maak timestamp - gebruik de opgeslagen timestamp_ms als die beschikbaar is
-  // Dit zorgt ervoor dat de timestamp de starttijd van de fase is (niet de eindtijd)
-  // Gebruik char array i.p.v. String om heap fragmentatie te voorkomen
-  char timestamp[20];
-  if (req->timestamp_ms > 0) {
-    // Gebruik de opgeslagen starttijd om de juiste timestamp te berekenen
-    getTimestampFromMillisChar(req->timestamp_ms, timestamp, sizeof(timestamp));
-  } else {
-    // Fallback naar huidige tijd
-    getTimestampChar(timestamp, sizeof(timestamp));
-  }
-  
-  // Bepaal totaal cycli string - gebruik char array i.p.v. String
-  char totaal_cycli[16];
-  if (req->cyclus_max == 0) {
-    strncpy(totaal_cycli, "inf", sizeof(totaal_cycli) - 1);
-    totaal_cycli[sizeof(totaal_cycli) - 1] = '\0';
-  } else {
-    snprintf(totaal_cycli, sizeof(totaal_cycli), "%d", req->cyclus_max);
-  }
-  
-  // BELANGRIJK: Feed watchdog voordat we FirebaseJson objecten maken
-  // Dit voorkomt watchdog timeout tijdens heap allocaties
-  vTaskDelay(pdMS_TO_TICKS(1));
-  
-  // BELANGRIJK: Declareer success variabele BUITEN de FirebaseJson scope
-  // zodat deze beschikbaar is na de scope
-  bool success = false;
-  unsigned long log_start = millis();
-  int attempt = 0;
-  const int MAX_ATTEMPTS = 3; // Eerste poging + 2 retries (verlaagd om SSL overbelasting te voorkomen)
-  
-  // Bereid FirebaseJson voor - gebruik scope om automatisch destructor aan te roepen
-  // BELANGRIJK: FirebaseJson objecten kunnen heap fragmentatie veroorzaken
-  // Scope zorgt ervoor dat destructors worden aangeroepen en geheugen wordt vrijgegeven
-  {
-    FirebaseJson response;
-    FirebaseJson valueRange;
-    
-    // BELANGRIJK: Feed watchdog na object creatie
-    vTaskDelay(pdMS_TO_TICKS(1));
-    
-    valueRange.add("majorDimension", "ROWS");
-    
-    // BELANGRIJK: Feed watchdog tijdens data toevoegen
-    vTaskDelay(pdMS_TO_TICKS(1));
-    
-    // Voeg de data toe (9 kolommen: Timestamp, Meettemperatuur, Status, Huidige cyclus, Totaal cycli, T_top, T_dal, Fase tijd, Cyclus tijd)
-    valueRange.set("values/[0]/[0]", timestamp);           // Timestamp (char array)
-    valueRange.set("values/[0]/[1]", req->temp);          // Meettemperatuur
-    valueRange.set("values/[0]/[2]", req->status);        // Status
-    valueRange.set("values/[0]/[3]", req->cyclus_teller); // Huidige cyclus
-    valueRange.set("values/[0]/[4]", totaal_cycli);      // Totaal cycli
-    valueRange.set("values/[0]/[5]", req->T_top);         // T_top
-    valueRange.set("values/[0]/[6]", req->T_bottom);       // T_dal
-    valueRange.set("values/[0]/[7]", req->fase_tijd);     // Fase tijd
-    valueRange.set("values/[0]/[8]", req->cyclus_tijd);    // Cyclus tijd (totaaltijd opwarmen + afkoelen)
-    
-    // BELANGRIJK: Feed watchdog na data toevoegen, voor API call
-    vTaskDelay(pdMS_TO_TICKS(1));
-    
-    // Zorg dat token up-to-date is - één non-blocking aanroep
-    // BELANGRIJK: Geen while loop om IDLE task niet te blokkeren (voorkomt watchdog timeout)
-    // Token wordt periodiek gecontroleerd in loggingTask elke 10 seconden
-    // Als token niet klaar is, zal logging falen en later opnieuw worden geprobeerd
-    sheet.ready();
-    
-    // Log naar Google Sheets - werkblad "DataLog-K" - met timeout en retry
-    // BELANGRIJK: Verbeterde error handling voor SSL fouten
-    
-    // BELANGRIJK: Geef SSL layer tijd om te herstellen tussen pogingen
-    // Te veel snelle retries kunnen SSL verbinding overbelasten
-    while ((millis() - log_start < 15000) && attempt < MAX_ATTEMPTS) { // Max 15 seconden timeout
-      // BELANGRIJK: sheet.values.append() kan lang duren - geef andere tasks tijd
-      // Dit voorkomt watchdog timeouts en stack overflows
-      vTaskDelay(pdMS_TO_TICKS(10)); // Korte delay voor andere tasks (verhoogd van 1ms)
-      
-      // Probeer logging
-      success = sheet.values.append(&response, SPREADSHEET_ID, "DataLog-K!A1", &valueRange);
-      if (success) {
-        break;
-      }
-      
-      attempt++;
-      
-      // Delay alleen als we nog een retry gaan doen (niet na laatste poging)
-      if (attempt < MAX_ATTEMPTS && (millis() - log_start < 15000)) {
-        // BELANGRIJK: Langere delays tussen retries om SSL layer tijd te geven te herstellen
-        // Exponential backoff: 500ms, 1000ms (was: 100ms, 200ms, 300ms)
-        int delay_ms = 500 * attempt;
-        // Verdeel delay in chunks om watchdog te voeden
-        int chunks = delay_ms / 100; // 100ms chunks
-        for (int i = 0; i < chunks; i++) {
-          vTaskDelay(pdMS_TO_TICKS(100));
-        }
-        // Rest delay
-        if (delay_ms % 100 > 0) {
-          vTaskDelay(pdMS_TO_TICKS(delay_ms % 100));
-        }
-      }
-    }
-    
-    // BELANGRIJK: Feed watchdog na FirebaseJson operaties, voor destructors
-    vTaskDelay(pdMS_TO_TICKS(1));
-    
-    // FirebaseJson objecten worden hier automatisch vrijgegeven (destructor)
-    // BELANGRIJK: Destructors kunnen heap operaties doen - feed watchdog
-  } // FirebaseJson objecten worden hier vrijgegeven
-  
-  // BELANGRIJK: Feed watchdog na FirebaseJson scope (na destructors)
-  vTaskDelay(pdMS_TO_TICKS(1));
-  
-  if (success) {
-    // Zet flag voor visuele feedback (wordt verwerkt in main loop op Core 1)
-    g_logSuccessFlag = true;
-    g_logSuccessTime = millis();
-  } else {
-    // Logging mislukt - zet error flag (optioneel voor debugging)
-    // BELANGRIJK: Zelfs bij falen doorgaan, anders stopt alle logging
-    // De volgende logging request kan wel slagen
-    
-    // Geef SSL layer extra tijd om te herstellen na fout
-    // Dit voorkomt dat opeenvolgende requests de SSL verbinding overbelasten
-    vTaskDelay(pdMS_TO_TICKS(500)); // Extra delay na fout
-  }
-}
+// VERPLAATST NAAR Logger module - functie verwijderd, Logger::logInternal() wordt nu gebruikt
+// logToGoogleSheet_internal() wordt niet meer gebruikt - Logger module handelt dit af
 
 // Forward declaration voor globale GUI variabelen (nodig voor static functies)
 extern lv_obj_t * text_label_temp_value;
@@ -1079,7 +677,8 @@ static void updateTempDisplay(float temp) {
 // Helper functie: haal kritieke temperatuur op met fallback
 // Retourneert NAN als geen geldige meting beschikbaar is
 static float getCriticalTemp() {
-  float temp = readTempC_critical();
+  // VERPLAATST NAAR TempSensor module
+  float temp = tempSensor.getCritical();
   if (isnan(temp)) {
     // Fallback naar normale mediaan als critical read faalt
     temp = getMedianTemp();
@@ -1100,23 +699,23 @@ static void handleSafetyCooling() {
     if (veiligheidskoeling_naloop_start_tijd == 0) {
       veiligheidskoeling_naloop_start_tijd = millis();
       // Log dat veiligheidstemperatuur is bereikt en naloop start
-      logToGoogleSheet("Veiligheidskoeling");
+    logToGoogleSheet("Veiligheidskoeling");
     }
     
     // Check of naloop periode (2 minuten) is verstreken
     unsigned long naloop_verstreken = millis() - veiligheidskoeling_naloop_start_tijd;
     if (naloop_verstreken >= VEILIGHEIDSKOELING_NALOOP_MS) {
       // Naloop periode is verstreken - schakel uit
-      koelingsfase_actief = false;
-      alleRelaisUit();
-      verwarmen_start_tijd = 0;
-      koelen_start_tijd = 0;
-      veiligheidskoeling_start_tijd = 0;
+    koelingsfase_actief = false;
+    alleRelaisUit();
+    verwarmen_start_tijd = 0;
+    koelen_start_tijd = 0;
+    veiligheidskoeling_start_tijd = 0;
       veiligheidskoeling_naloop_start_tijd = 0;
-      logToGoogleSheet("Uit");
-    } else {
+    logToGoogleSheet("Uit");
+  } else {
       // Naloop periode nog niet verstreken - blijf koelen
-      koelenAan();
+    koelenAan();
     }
   } else {
     // Temperatuur nog niet veilig - blijf koelen en reset naloop timer
@@ -1897,23 +1496,26 @@ void updateGUI() {
   }
   
   // Update cyclus teller - formaat: "Cycli: xxx/yyy" of "Cycli: xxx/inf"
-  // Gebruik char array i.p.v. String om heap fragmentatie te voorkomen
+  // VERPLAATST NAAR CycleController module - gebruik getters
   char cyclus_text[32];
-  if (cyclus_max == 0) {
-    snprintf(cyclus_text, sizeof(cyclus_text), "Cycli: %d/inf", cyclus_teller);
+  int current_cyclus = cycleController.getCycleCount();
+  int max_cyclus = cyclus_max; // Nog via globale variabele (kan later naar CycleController)
+  if (max_cyclus == 0) {
+    snprintf(cyclus_text, sizeof(cyclus_text), "Cycli: %d/inf", current_cyclus);
   } else {
-    snprintf(cyclus_text, sizeof(cyclus_text), "Cycli: %d/%d", cyclus_teller, cyclus_max);
+    snprintf(cyclus_text, sizeof(cyclus_text), "Cycli: %d/%d", current_cyclus, max_cyclus);
   }
   lv_label_set_text(text_label_cyclus, cyclus_text);
   
   // Update status - gebruik char array i.p.v. String
+  // VERPLAATST NAAR CycleController module - gebruik getters
   const char* status_suffix = "";
-  if (koelingsfase_actief) {
+  if (cycleController.isSafetyCooling()) {
     status_suffix = "Veiligheidskoeling";
-  } else if (systeem_uit) {
+  } else if (cycleController.isSystemOff()) {
     status_suffix = "Uit";
-  } else if (cyclus_actief) {
-    status_suffix = verwarmen_actief ? "Verwarmen" : "Koelen";
+  } else if (cycleController.isActive()) {
+    status_suffix = cycleController.isHeating() ? "Verwarmen" : "Koelen";
   } else {
     status_suffix = "Gereed";
   }
@@ -1931,11 +1533,10 @@ void updateGUI() {
   lv_label_set_text(text_label_t_bottom, t_bottom_text);
   
   // Update timer weergaven - gebruik char array i.p.v. String
-  // BELANGRIJK: Controleer eerst verwarmen_actief flag, dan pas timer
-  // Dit voorkomt dat de verkeerde timer wordt getoond tijdens fase overgangen
-  if (cyclus_actief && verwarmen_actief && verwarmen_start_tijd > 0) {
-    // We zijn aan het verwarmen EN de timer loopt
-    unsigned long verwarmen_verstreken = millis() - verwarmen_start_tijd;
+  // VERPLAATST NAAR CycleController module - gebruik getters
+  if (cycleController.isActive() && cycleController.isHeating()) {
+    // We zijn aan het verwarmen
+    unsigned long verwarmen_verstreken = cycleController.getHeatingElapsed();
     char tijd_str[16];
     formatTijdChar(verwarmen_verstreken, tijd_str, sizeof(tijd_str));
     char verwarmen_text[32];
@@ -1943,9 +1544,9 @@ void updateGUI() {
     lv_label_set_text(text_label_verwarmen_tijd, verwarmen_text);
     // Zet koelen timer op 0:00 tijdens verwarmen
     lv_label_set_text(text_label_koelen_tijd, "Afkoelen: 0:00");
-  } else if (cyclus_actief && !verwarmen_actief && koelen_start_tijd > 0) {
-    // We zijn aan het koelen EN de timer loopt
-    unsigned long koelen_verstreken = millis() - koelen_start_tijd;
+  } else if (cycleController.isActive() && !cycleController.isHeating()) {
+    // We zijn aan het koelen
+    unsigned long koelen_verstreken = cycleController.getCoolingElapsed();
     char tijd_str[16];
     formatTijdChar(koelen_verstreken, tijd_str, sizeof(tijd_str));
     char koelen_text[32];
@@ -1960,11 +1561,12 @@ void updateGUI() {
   }
   
   // Update knop kleuren op basis van systeemstatus
-  if (koelingsfase_actief) {
+  // VERPLAATST NAAR CycleController module - gebruik getters
+  if (cycleController.isSafetyCooling()) {
     // Veiligheidskoeling: beide knoppen grijs (geen bediening mogelijk)
     lv_obj_set_style_bg_color(btn_start, lv_color_hex(0x808080), LV_PART_MAIN); // Grey
     lv_obj_set_style_bg_color(btn_stop, lv_color_hex(0x808080), LV_PART_MAIN);  // Grey
-  } else if (cyclus_actief && !systeem_uit) {
+  } else if (cycleController.isActive() && !cycleController.isSystemOff()) {
     // Systeem actief: START grijs, STOP rood
     lv_obj_set_style_bg_color(btn_start, lv_color_hex(0x808080), LV_PART_MAIN); // Grey
     lv_obj_set_style_bg_color(btn_stop, lv_color_hex(0xAA0000), LV_PART_MAIN);  // Red
@@ -1978,116 +1580,15 @@ void updateGUI() {
 // ---- Event handlers ----
 void start_button_event(lv_event_t * e) {
   lv_event_code_t code = lv_event_get_code(e);
-  
   if(code == LV_EVENT_PRESSED) {
-    // Reset systeem status - altijd mogelijk om te starten
-    systeem_uit = false;
-    koelingsfase_actief = false; // Reset veiligheidskoeling fase bij START
-    veiligheidskoeling_start_tijd = 0;
-    veiligheidskoeling_naloop_start_tijd = 0;
-    
-    if (!cyclus_actief) {
-      cyclus_actief = true;
-      cyclus_teller = 1;  // Reset cyclus teller (start bij 1)
-      systeemAan();
-      
-      // Log START eerst
-      logToGoogleSheet("START");
-      
-      // BELANGRIJK: Reset grafiek data ALLEEN bij START (niet bij cyclus overgangen)
-      // Grafiek moet doorlopen over alle cycli heen tot systeem UIT
-      if (graph_temps != nullptr && graph_times != nullptr) {
-        for (int i = 0; i < GRAPH_POINTS; i++) {
-          graph_temps[i] = NAN;  // Reset data
-          graph_times[i] = 0;
-        }
-        graph_write_index = 0;
-        graph_count = 0;
-        graph_data_ready = false;
-        graph_last_log_time = 0; // Reset timer zodat eerste meting meteen kan starten
-        graph_force_rebuild = false;
-      }
-      
-      // Reset timers en fase duur opslag
-      verwarmen_start_tijd = 0;
-      koelen_start_tijd = 0;
-      last_opwarmen_duur = 0;
-      last_koelen_duur = 0;
-      
-      // Reset gemiddelde opwarmtijd tracking voor beveiliging
-      gemiddelde_opwarmen_duur = 0;
-      opwarmen_telling = 0;
-      
-      // Reset temperatuur stagnatie tracking voor beveiliging
-      laatste_temp_voor_stagnatie = NAN;
-      stagnatie_start_tijd = 0;
-      
-      // Start logica:
-      // - Als meettemp < T_top: opwarmen (verwarming aan)
-      // - Als meettemp >= T_top: koelen (pomp aan)
-      if (isnan(g_currentTempC)) {
-        // Geen geldige temperatuur - start met verwarmen als default
-        verwarmen_actief = true;
-        verwarmenAan();  // Start met verwarmen
-        verwarmen_start_tijd = millis(); // Start opwarmen timer
-        // Log niet bij START - wacht tot eerste faseovergang
-      } else if (g_currentTempC < T_top) {
-        // Meettemp < T_top: opwarmen (verwarming aan)
-        verwarmen_actief = true;
-        verwarmenAan();  // Start met verwarmen
-        verwarmen_start_tijd = millis(); // Start opwarmen timer
-        // Log niet bij START - wacht tot eerste faseovergang (opwarmen→afkoelen)
-      } else {
-        // Meettemp >= T_top: koelen (pomp aan)
-        verwarmen_actief = false;
-        koelenAan();     // Start met koelen
-        koelen_start_tijd = millis(); // Start afkoelen timer
-        // Log niet bij START - wacht tot eerste faseovergang (afkoelen→opwarmen)
-      }
-    }
+    uiController.onStartButton();
   }
 }
 
 void stop_button_event(lv_event_t * e) {
   lv_event_code_t code = lv_event_get_code(e);
   if(code == LV_EVENT_PRESSED) {
-    // Log STOP knop bediening eerst
-    logToGoogleSheet("STOP");
-    
-    // STOP logica:
-    // - Als meettemp <= 35°C: meteen UIT
-    // - Als meettemp > 35°C: veiligheidskoelen (pomp aan) tot < 35°C
-    if (isnan(g_currentTempC)) {
-      // Geen geldige temperatuur - direct uit als veilig
-      alleRelaisUit();
-      cyclus_actief = false;
-      systeem_uit = true;
-      verwarmen_start_tijd = 0;
-      koelen_start_tijd = 0;
-      veiligheidskoeling_start_tijd = 0;
-      veiligheidskoeling_naloop_start_tijd = 0;
-      logToGoogleSheet("Uit"); // Log STOP: direct uit
-    } else if (g_currentTempC <= TEMP_SAFETY_COOLING) {
-      // Meettemp <= TEMP_SAFETY_COOLING: meteen UIT
-      alleRelaisUit();
-      cyclus_actief = false;
-      systeem_uit = true;
-      // Reset timers
-      verwarmen_start_tijd = 0;
-      koelen_start_tijd = 0;
-      veiligheidskoeling_start_tijd = 0;
-      veiligheidskoeling_naloop_start_tijd = 0;
-      logToGoogleSheet("Uit"); // Log STOP: direct uit
-    } else {
-      // Meettemp > 35°C: veiligheidskoelen (pomp aan) tot < 35°C
-      koelingsfase_actief = true;
-      cyclus_actief = false; // Stop normale cyclus
-      systeem_uit = true;    // Markeer als uitgeschakeld
-      koelenAan();           // Start veiligheidskoeling (pomp aan)
-      veiligheidskoeling_start_tijd = millis(); // Start timer voor veiligheidskoeling
-      veiligheidskoeling_naloop_start_tijd = 0; // Reset naloop timer (wordt gestart wanneer temp < 35°C)
-      logToGoogleSheet("Veiligheidskoeling"); // Log STOP met veiligheidskoeling
-    }
+    uiController.onStopButton();
   }
 }
 
@@ -2165,27 +1666,14 @@ void fill_chart_completely() {
 void graph_button_event(lv_event_t * e) {
   lv_event_code_t code = lv_event_get_code(e);
   if(code == LV_EVENT_PRESSED) {
-    // EENVOUDIGE CIRCULAIRE ARRAY: Bij openen grafiek toon altijd laatste 120 punten
-    // Force rebuild bij volgende update_graph_display() call
-    graph_force_rebuild = true;
-    
-    // Update Y-as labels op basis van huidige T_top
-    update_graph_y_axis_labels();
-    
-    // Schakel naar grafiek scherm
-    lv_scr_load(screen_graph);
-    
-    // BELANGRIJK: Update grafiek direct na scherm wissel
-    // Dit zorgt ervoor dat bestaande punten direct zichtbaar zijn
-    update_graph_display();
+    uiController.onGraphButton();
   }
 }
 
 void back_button_event(lv_event_t * e) {
   lv_event_code_t code = lv_event_get_code(e);
   if(code == LV_EVENT_PRESSED) {
-    // Schakel terug naar main scherm
-    lv_scr_load(screen_main);
+    uiController.onBackButton();
   }
 }
 
@@ -2233,7 +1721,7 @@ void log_graph_data() {
     graph_data_ready = true;
     
     // Update timer alleen na succesvolle opslag
-    graph_last_log_time = now;
+      graph_last_log_time = now;
     
     // REAL-TIME UPDATE: Als grafiek scherm actief is, update direct
     // Dit zorgt voor minimale vertraging tussen data logging en grafiek weergave
@@ -2383,7 +1871,7 @@ void update_graph_display() {
     }
     if (max_time > 0) {
       last_displayed_time = max_time;
-    } else {
+  } else {
       // Als er geen punten zijn, zet last_displayed_time naar 0 zodat nieuwe punten worden getoond
       last_displayed_time = 0;
     }
@@ -2424,20 +1912,20 @@ void update_graph_display() {
       continue;
     }
     
-    float min_temp = 20.0;
-    float max_temp = T_top;
-    int chart_value = (int)(graph_temps[i] + 0.5);
-    chart_value = constrain(chart_value, (int)min_temp, (int)max_temp);
-    add_chart_point_with_trend(i, graph_temps[i], chart_value);
-    
+        float min_temp = 20.0;
+        float max_temp = T_top;
+        int chart_value = (int)(graph_temps[i] + 0.5);
+        chart_value = constrain(chart_value, (int)min_temp, (int)max_temp);
+        add_chart_point_with_trend(i, graph_temps[i], chart_value);
+        
     if (graph_times[i] > newest_time) {
       newest_time = graph_times[i];
     }
-    points_added++;
+      points_added++;
     
     if (points_added % 5 == 0) yield();
-  }
-  
+    }
+    
   // Update laatste weergegeven tijd
   if (points_added > 0 && newest_time > last_displayed_time) {
     last_displayed_time = newest_time;
@@ -2448,47 +1936,28 @@ void update_graph_display() {
 void t_top_plus_event(lv_event_t * e) {
   lv_event_code_t code = lv_event_get_code(e);
   if(code == LV_EVENT_PRESSED) {
-    T_top += 1.0;
-    // BELANGRIJK: Gebruik >= i.p.v. > om floating point problemen te voorkomen
-    if (T_top >= TEMP_MAX) {
-      T_top = TEMP_MAX;
-    }
-    char log_msg[32];
-    snprintf(log_msg, sizeof(log_msg), "Top+%.1f", T_top);
-    saveAndLogSetting(log_msg, true);
+    uiController.onTtopPlus();
   }
 }
 
 void t_top_minus_event(lv_event_t * e) {
   lv_event_code_t code = lv_event_get_code(e);
   if(code == LV_EVENT_PRESSED) {
-    T_top -= 1.0;
-    if (T_top < T_bottom + TEMP_MIN_DIFF) T_top = T_bottom + TEMP_MIN_DIFF;
-    char log_msg[32];
-    snprintf(log_msg, sizeof(log_msg), "Top-%.1f", T_top);
-    saveAndLogSetting(log_msg, true);
+    uiController.onTtopMinus();
   }
 }
 
 void t_bottom_plus_event(lv_event_t * e) {
   lv_event_code_t code = lv_event_get_code(e);
   if(code == LV_EVENT_PRESSED) {
-    T_bottom += 1.0;
-    if (T_bottom > T_top - TEMP_MIN_DIFF) T_bottom = T_top - TEMP_MIN_DIFF;
-    char log_msg[32];
-    snprintf(log_msg, sizeof(log_msg), "Dal+%.1f", T_bottom);
-    saveAndLogSetting(log_msg);
+    uiController.onTbottomPlus();
   }
 }
 
 void t_bottom_minus_event(lv_event_t * e) {
   lv_event_code_t code = lv_event_get_code(e);
   if(code == LV_EVENT_PRESSED) {
-    T_bottom -= 1.0;
-    if (T_bottom < 0.0) T_bottom = 0.0; // Min temperatuur
-    char log_msg[32];
-    snprintf(log_msg, sizeof(log_msg), "Dal-%.1f", T_bottom);
-    saveAndLogSetting(log_msg);
+    uiController.onTbottomMinus();
   }
 }
 
@@ -2525,7 +1994,8 @@ void temp_minus_event(lv_event_t * e) {
 
 void setup() {
   SPI.begin();
-  thermocouple.begin();
+  thermocouple.begin(); // Oude instantie - wordt vervangen door tempSensor
+  tempSensor.begin();
   
   // BELANGRIJK: Stel software SPI delay in voor betere communicatie stabiliteit
   // Dit voorkomt timing problemen bij hoge CPU belasting
@@ -2538,7 +2008,33 @@ void setup() {
   Serial.begin(115200);
   
   // Laad opgeslagen instellingen uit non-volatile memory
+  // Initialiseer SettingsStore
+  settingsStore.begin();
   loadSettings();
+  
+  // Initialiseer CycleController (na loadSettings zodat settings beschikbaar zijn)
+  cycleController.begin(&tempSensor, &logger, RELAIS_KOELEN, RELAIS_VERWARMING);
+  cycleController.setTargetTop(T_top);
+  cycleController.setTargetBottom(T_bottom);
+  cycleController.setMaxCycles(cyclus_max);
+  
+  // Stel callback in voor logging (CycleController gebruikt logTransition() intern)
+  cycleController.setTransitionCallback([](const char* status, float temp, unsigned long timestamp) {
+    // CycleController handelt logging zelf af via logTransition()
+    // Deze callback kan gebruikt worden voor extra acties indien nodig
+  });
+  
+  // Initialiseer CycleController (na loadSettings zodat settings beschikbaar zijn)
+  cycleController.begin(&tempSensor, &logger, RELAIS_KOELEN, RELAIS_VERWARMING);
+  cycleController.setTargetTop(T_top);
+  cycleController.setTargetBottom(T_bottom);
+  cycleController.setMaxCycles(cyclus_max);
+  
+  // Stel callback in voor logging (CycleController gebruikt logTransition() intern)
+  cycleController.setTransitionCallback([](const char* status, float temp, unsigned long timestamp) {
+    // CycleController handelt logging zelf af via logTransition()
+    // Deze callback kan gebruikt worden voor extra acties indien nodig
+  });
 
   // Initialize GPIO pins for relais
   pinMode(RELAIS_KOELEN, OUTPUT);
@@ -2554,16 +2050,16 @@ void setup() {
   // BELANGRIJK: Discard eerste paar metingen voor stabiliteit
   // Eerste metingen na power-up kunnen onnauwkeurig zijn
   for (int i = 0; i < 3; i++) {
-    (void)readTempC();
+    (void)tempSensor.read(); // Warm-up reads - gebruik private read() via friend of direct via public API
     delay(MAX6675_CONVERSION_TIME_MS); // Wacht conversietijd tussen reads
   }
   
   // Reset conversietijd timer na warm-up
   g_lastMax6675ReadTime = 0;
   
-  // Alloceer buffers in DRAM
-  if (!allocate_buffers()) {
-    Serial.println("KRITIEKE FOUT: Kan buffers niet alloceren!");
+  // Initialiseer UIController (alloceert buffers en initialiseert grafiek data)
+  if (!uiController.begin(FIRMWARE_VERSION_MAJOR, FIRMWARE_VERSION_MINOR)) {
+    Serial.println("KRITIEKE FOUT: Kan UIController niet initialiseren!");
     while(1) delay(1000); // Blijf hangen
   }
   
@@ -2584,7 +2080,7 @@ void setup() {
   // Initialize the TFT display using the TFT_eSPI library
   // Bereken juiste buffer grootte op basis van LV_COLOR_DEPTH (nu beschikbaar na LVGL init)
   size_t actual_draw_buf_size = SCREEN_WIDTH * SCREEN_HEIGHT / 10 * (LV_COLOR_DEPTH / 8);
-  disp = lv_tft_espi_create(SCREEN_WIDTH, SCREEN_HEIGHT, draw_buf, actual_draw_buf_size);
+  disp = lv_tft_espi_create(SCREEN_WIDTH, SCREEN_HEIGHT, uiController.getDrawBuf(), actual_draw_buf_size);
   lv_display_set_rotation(disp, LV_DISPLAY_ROTATION_270);
   
   // Initialize an LVGL input device object (Touchscreen)
@@ -2595,17 +2091,85 @@ void setup() {
   // Opmerking: lv_indev_set_read_period() is niet beschikbaar in deze LVGL versie
   // Touch response wordt verbeterd door vaker lv_task_handler() aan te roepen in loop()
 
-  // Initialiseer grafiek data
-  init_graph_data();
-
-  // Maak hoofdscherm eerst (zodat status labels beschikbaar zijn)
-  lv_create_main_gui();
+  // Maak schermen (UIController heeft al buffers gealloceerd en grafiek data geïnitialiseerd)
+  uiController.createMainScreen();
+  uiController.createGraphScreen();
+  
+  // Stel callbacks in voor UIController
+  uiController.setStartCallback([]() {
+    logToGoogleSheet("START");
+    cycleController.start();
+  });
+  
+  uiController.setStopCallback([]() {
+    logToGoogleSheet("STOP");
+    cycleController.stop();
+  });
+  
+  uiController.setGraphResetCallback([]() {
+    // Reset grafiek data bij START
+    float* graph_temps = uiController.getGraphTemps();
+    unsigned long* graph_times = uiController.getGraphTimes();
+    if (graph_temps != nullptr && graph_times != nullptr) {
+      for (int i = 0; i < 120; i++) {
+        graph_temps[i] = NAN;
+        graph_times[i] = 0;
+      }
+      uiController.setGraphWriteIndex(0);
+      uiController.setGraphCount(0);
+      uiController.setGraphDataReady(false);
+      uiController.setGraphLastLogTime(0);
+      uiController.setGraphForceRebuild(false);
+    }
+  });
+  
+  uiController.setSettingChangeCallback([](const char* setting, float value) {
+    if (strcmp(setting, "T_top") == 0) {
+      T_top += value;
+      if (T_top >= TEMP_MAX) T_top = TEMP_MAX;
+      if (T_top < T_bottom + TEMP_MIN_DIFF) T_top = T_bottom + TEMP_MIN_DIFF;
+      char log_msg[32];
+      snprintf(log_msg, sizeof(log_msg), value > 0 ? "Top+%.1f" : "Top-%.1f", T_top);
+      saveAndLogSetting(log_msg, true);
+      cycleController.setTargetTop(T_top);
+    } else if (strcmp(setting, "T_bottom") == 0) {
+      T_bottom += value;
+      if (T_bottom > T_top - TEMP_MIN_DIFF) T_bottom = T_top - TEMP_MIN_DIFF;
+      if (T_bottom < 0.0) T_bottom = 0.0;
+      char log_msg[32];
+      snprintf(log_msg, sizeof(log_msg), value > 0 ? "Dal+%.1f" : "Dal-%.1f", T_bottom);
+      saveAndLogSetting(log_msg);
+      cycleController.setTargetBottom(T_bottom);
+    } else if (strcmp(setting, "temp_offset") == 0) {
+      temp_offset += value;
+      if (temp_offset < -10.0) temp_offset = -10.0;
+      if (temp_offset > 10.0) temp_offset = 10.0;
+      char log_msg[32];
+      snprintf(log_msg, sizeof(log_msg), value > 0 ? "Offset+%.1f" : "Offset-%.1f", temp_offset);
+      saveAndLogSetting(log_msg);
+      tempSensor.setOffset(temp_offset);
+    }
+  });
+  
+  // Stel status callbacks in
+  uiController.setIsActiveCallback([]() { return cycleController.isActive(); });
+  uiController.setIsHeatingCallback([]() { return cycleController.isHeating(); });
+  uiController.setIsSystemOffCallback([]() { return cycleController.isSystemOff(); });
+  uiController.setIsSafetyCoolingCallback([]() { return cycleController.isSafetyCooling(); });
+  uiController.setGetCycleCountCallback([]() { return cycleController.getCycleCount(); });
+  uiController.setGetHeatingElapsedCallback([]() { return cycleController.getHeatingElapsed(); });
+  uiController.setGetCoolingElapsedCallback([]() { return cycleController.getCoolingElapsed(); });
+  uiController.setGetMedianTempCallback([]() { return getMedianTemp(); });
+  uiController.setGetLastValidTempCallback([]() { return g_lastValidTempC; });
+  uiController.setTtopCallback([]() { return T_top; });
+  uiController.setTbottomCallback([]() { return T_bottom; });
+  uiController.setCyclusMaxCallback([]() { return cyclus_max; });
   
   // Zet alle knoppen grijs tijdens initialisatie
-  setAllButtonsGray();
+  uiController.setButtonsGray();
   
   // Toon initialisatie status
-  showInitStatus("WiFi initialiseren", 0x000000); // Zwart
+  uiController.showInitStatus("WiFi initialiseren", 0x000000); // Zwart
   
   // ---- WiFi en Google Sheets initialisatie ----
   // WiFiManager voor WiFi configuratie
@@ -2620,7 +2184,7 @@ void setup() {
     // BELANGRIJK: Gebruik char array i.p.v. String om heap fragmentatie te voorkomen
     char apText[64];
     snprintf(apText, sizeof(apText), "Stel WiFi in via AP op %s", apIP.toString().c_str());
-    showInitStatus(apText, 0x000000); // Zwart
+    uiController.showInitStatus(apText, 0x000000); // Zwart
     
     // Force LVGL update zodat tekst direct zichtbaar is
     lv_task_handler();
@@ -2653,7 +2217,7 @@ void setup() {
   }
   
   if (!res) {
-    showWifiStatus("WiFi: MISLUKT - herstart", true); // Rood (fout)
+    uiController.showWifiStatus("WiFi: MISLUKT - herstart", true); // Rood (fout)
     // Blijf doorgaan zonder WiFi - logging werkt dan niet
   }
   
@@ -2662,81 +2226,56 @@ void setup() {
     char wifiInfo[128];
     snprintf(wifiInfo, sizeof(wifiInfo), "WiFi: %s (%s)", 
              WiFi.SSID().c_str(), WiFi.localIP().toString().c_str());
-    showWifiStatus(wifiInfo, false); // Grijs (succes)
+    uiController.showWifiStatus(wifiInfo, false); // Grijs (succes)
     
     // Configureer NTP tijd met lokale tijdzone offset (+1 uur = 3600 seconden)
-    showGSStatus("Google Sheets: tijd synchroniseren...", false); // Grijs
-    configTime(3600, 0, "pool.ntp.org"); // GMT offset: +1 uur (3600 seconden), geen daylight saving offset
-    struct tm timeinfo;
-    int ntp_tries = 0;
-    while (!getLocalTime(&timeinfo) && ntp_tries < 10) {
-      delay(1000);
-      yield(); // BELANGRIJK: Feed watchdog in while loop
-      lv_task_handler(); // Update display tijdens wachten
-      ntp_tries++;
-    }
-    if (getLocalTime(&timeinfo)) {
-      // Sla NTP sync tijd op voor timestamp berekening
-      ntp_sync_time_ms = millis();
-      ntp_sync_unix_time = mktime(&timeinfo);
-    }
+    uiController.showGSStatus("Google Sheets: tijd synchroniseren...", false); // Grijs
+    systemClock.begin(3600); // GMT offset: +1 uur (3600 seconden), geen daylight saving offset
+    systemClock.sync(); // Synchroniseer NTP tijd
     
-    // Initialiseer Google Sheets client
-    showGSStatus("Google Sheets: authenticeren...", false); // Grijs
-    sheet.setTokenCallback(gs_tokenStatusCallback);
-    sheet.setPrerefreshSeconds(10 * 60); // Refresh token elke 10 minuten
-    sheet.begin(CLIENT_EMAIL, PROJECT_ID, PRIVATE_KEY);
-    
+    // Initialiseer Logger module (handelt Google Sheets client af)
+    uiController.showGSStatus("Google Sheets: authenticeren...", false); // Grijs
+    if (logger.begin(CLIENT_EMAIL, PROJECT_ID, PRIVATE_KEY, SPREADSHEET_ID, &systemClock)) {
     // Wacht op token authenticatie (max 30 seconden)
+      // BELANGRIJK: Logger task roept sheetClient.ready() aan om token authenticatie te verwerken
     int auth_tries = 0;
-    while (!g_googleAuthTokenReady && auth_tries < 60) {
-      sheet.ready(); // Verwerk token requests
+      while (!logger.isTokenReady() && auth_tries < 60) {
       delay(500);
       yield(); // BELANGRIJK: Feed watchdog in while loop
       lv_task_handler(); // Update display tijdens wachten
       auth_tries++;
       if (auth_tries % 10 == 0) {
-        showGSStatus("Google Sheets: wachten...", false); // Grijs
+        uiController.showGSStatus("Google Sheets: wachten...", false); // Grijs
       }
     }
     
-    if (g_googleAuthTokenReady) {
-      showGSStatus("Google Sheets: GEREED", false); // Grijs (succes)
+      if (logger.isTokenReady()) {
+      uiController.showGSStatus("Google Sheets: GEREED", false); // Grijs (succes)
+        g_googleAuthTokenReady = true; // Update globale variabele voor backward compatibility
       delay(1000); // Korte pauze
     } else {
-      showGSStatus("Google Sheets: MISLUKT", true); // Rood (fout)
+        uiController.showGSStatus("Google Sheets: MISLUKT", true); // Rood (fout)
       delay(1000);
     }
   } else {
-    showGSStatus("Google Sheets: WiFi nodig", false); // Grijs
+      uiController.showGSStatus("Google Sheets: MISLUKT", true); // Rood (fout)
+      delay(1000);
+    }
+  } else {
+    uiController.showGSStatus("Google Sheets: WiFi nodig", false); // Grijs
     delay(1000);
   }
   
   // Verberg initialisatie status (status regels blijven zichtbaar)
-  hideInitStatus();
+  uiController.hideInitStatus();
   
   // Zet alle knoppen terug naar normale kleuren (initialisatie compleet)
-  setAllButtonsNormal();
+  uiController.setButtonsNormal();
   
-  // Initialiseer FreeRTOS queue voor logging
-  logQueue = xQueueCreate(LOG_QUEUE_SIZE, sizeof(LogRequest));
-  if (logQueue == nullptr) {
-    Serial.println("❌ KRITIEK: Kan logging queue niet aanmaken!");
-    while(1) delay(1000); // Blijf hangen
-  }
-  
-  // Start logging task op Core 1 (samen met loop() - lagere prioriteit voor betere knopbediening)
-  // Verhoogde stack grootte voor FirebaseJson operaties (was 8192, nu 16384)
-  // BELANGRIJK: Logging op Core 1 zodat Core 0 meer beschikbaar is voor real-time taken
-  xTaskCreatePinnedToCore(
-    loggingTask,           // Task functie
-    "LoggingTask",         // Task naam
-    16384,                 // Stack grootte (bytes) - verhoogd voor FirebaseJson
-    NULL,                  // Parameters
-    1,                     // Prioriteit verlaagd (was 2) zodat knopbediening prioriteit heeft
-    &loggingTaskHandle,    // Task handle
-    1                      // Core 1 (samen met loop() - Core 0 blijft beschikbaar voor real-time taken)
-  );
+  // Logger module is al geïnitialiseerd in WiFi sectie hierboven
+  // Update globale variabelen voor backward compatibility
+  logQueue = nullptr; // Logger module handelt queue af
+  loggingTaskHandle = nullptr; // Logger module handelt task af
 }
 
 void loop() {
@@ -2753,13 +2292,17 @@ void loop() {
   
   // Google Sheets token refresh wordt nu gedaan in logging task op Core 1
   
-  // Behandel logging success feedback (vanuit Core 1)
-  if (g_logSuccessFlag) {
+  // Behandel logging success feedback (vanuit Core 1 via Logger module)
+  if (logger.hasLogSuccess()) {
     showGSSuccessCheckmark();  // Toon groen vinkje
-    g_logSuccessFlag = false;  // Reset flag
+    logger.clearLogSuccess();  // Reset flag
+    // Update globale variabelen voor backward compatibility
+    g_logSuccessFlag = false;
+    g_logSuccessTime = logger.getLogSuccessTime(); // Update tijdstempel
   }
   
-  // Verwijder vinkje na 1 seconde
+  // Verwijder vinkje na 1 seconde (gebruik globale variabele voor backward compatibility)
+  // TODO: Dit kan later worden verplaatst naar Logger module
   if (g_logSuccessTime > 0 && (millis() - g_logSuccessTime >= 1000)) {
     if (gs_status_label != nullptr && strlen(g_lastGSStatusText) > 0) {
       // Reset naar originele tekst (zonder vinkje)
@@ -2770,35 +2313,46 @@ void loop() {
   }
   
   // Temperatuur meting (elke 0.3 seconde)
-  sampleMax6675();
+  // VERPLAATST NAAR TempSensor module
+  tempSensor.sample();
+  // Update globale variabelen voor backward compatibility
+  g_currentTempC = tempSensor.getCurrent();
+  g_avgTempC = tempSensor.getMedian();
+  g_lastValidTempC = tempSensor.getLastValid();
   yield(); // Feed watchdog na temperatuur meting
   lv_task_handler(); // Laat LVGL touch events verwerken
   
   // Update cyclus logica
-  // BELANGRIJK: Dit kan lang duren bij statusovergangen - feed watchdog
-  cyclusLogica();
+  // VERPLAATST NAAR CycleController module
+  cycleController.update();
   yield(); // Feed watchdog na cyclus logica
   lv_task_handler(); // Laat LVGL touch events verwerken (belangrijk voor responsiviteit)
   
   // Log grafiek data
-  log_graph_data();
+  uiController.logGraphData();
   yield(); // Feed watchdog na grafiek logging
   lv_task_handler(); // Laat LVGL touch events verwerken
   
   // Update GUI labels (alleen op main scherm)
   static unsigned long last_gui_update = 0;
-  if (lv_scr_act() == screen_main) {
+  if (lv_scr_act() == uiController.getMainScreen()) {
     if (millis() - last_gui_update >= GUI_UPDATE_INTERVAL_MS) {
-      updateGUI();
+      // Update temperatuur display
+      uiController.updateTemperature(g_avgTempC, g_lastValidTempC);
+      
+      // Update status, cyclus teller, timers, settings, en knop kleuren
+      // TODO: Deze moeten nog worden geïmplementeerd in UIController::update()
+      // Voor nu: gebruik oude updateGUI() als fallback
+      updateGUI(); // Tijdelijk - wordt later vervangen door uiController.update()
       last_gui_update = millis();
     }
-  } else if (lv_scr_act() == screen_graph) {
+  } else if (lv_scr_act() == uiController.getGraphScreen()) {
     // Update grafiek wanneer op grafiek scherm (elke 0.5 seconde als backup)
-    // REAL-TIME: Directe updates gebeuren al in log_graph_data() bij nieuwe data
+    // REAL-TIME: Directe updates gebeuren al in logGraphData() bij nieuwe data
     unsigned long now = millis();
     if (now - g_lastGraphUpdateMs >= GRAPH_UPDATE_INTERVAL_MS) {
       g_lastGraphUpdateMs = now;
-      update_graph_display();
+      uiController.updateGraph();
     }
   }
   
