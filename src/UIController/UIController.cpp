@@ -23,7 +23,7 @@ UIController::UIController()
       graph_temps(nullptr), graph_times(nullptr), graph_write_index(0), graph_count(0),
       graph_data_ready(false), graph_last_log_time(0), last_graph_update_ms(0),
       graph_force_rebuild(false), draw_buf(nullptr),
-      firmwareVersionMajor(3), firmwareVersionMinor(95),
+      firmwareVersionMajor(3), firmwareVersionMinor(96),
       last_display_ms(0), last_displayed_time(0) {
     // Initialiseer y_axis_labels array
     for (int i = 0; i < 6; i++) {
@@ -354,11 +354,17 @@ void UIController::updateTimers(unsigned long heating, unsigned long cooling) {
 }
 
 void UIController::showInitStatus(const char* message, uint32_t color) {
-    // Placeholder - wordt later geïmplementeerd
+    if (init_status_label == nullptr) return;
+    
+    lv_label_set_text(init_status_label, message);
+    lv_obj_set_style_text_color(init_status_label, lv_color_hex(color), LV_PART_MAIN);
+    lv_obj_clear_flag(init_status_label, LV_OBJ_FLAG_HIDDEN); // Zorg dat label zichtbaar is
 }
 
 void UIController::hideInitStatus() {
-    // Placeholder - wordt later geïmplementeerd
+    if (init_status_label == nullptr) return;
+    
+    lv_obj_add_flag(init_status_label, LV_OBJ_FLAG_HIDDEN); // Verberg label
 }
 
 void UIController::showWifiStatus(const char* message, bool isError) {
@@ -373,7 +379,19 @@ void UIController::showWifiStatus(const char* message, bool isError) {
 }
 
 void UIController::showGSStatus(const char* message, bool isError) {
-    // Placeholder - wordt later geïmplementeerd
+    if (gs_status_label == nullptr) return;
+    
+    // Bewaar laatste status tekst voor gebruik in showGSSuccessCheckmark
+    strncpy(last_gs_status_text, message, sizeof(last_gs_status_text) - 1);
+    last_gs_status_text[sizeof(last_gs_status_text) - 1] = '\0';
+    
+    lv_label_set_text(gs_status_label, message);
+    if (isError) {
+        lv_obj_set_style_text_color(gs_status_label, lv_color_hex(0xCC0000), LV_PART_MAIN); // Rood voor fout
+    } else {
+        lv_obj_set_style_text_color(gs_status_label, lv_color_hex(0x888888), LV_PART_MAIN); // Grijs voor succes
+    }
+    lv_obj_clear_flag(gs_status_label, LV_OBJ_FLAG_HIDDEN); // Zorg dat label zichtbaar is
 }
 
 void UIController::showGSSuccessCheckmark() {
