@@ -7,8 +7,8 @@
 #include <stdlib.h>
 #include <string.h>
 
-ConfigWebServer::ConfigWebServer() 
-    : server(80), settingsStore(nullptr), cycleController(nullptr), 
+ConfigWebServer::ConfigWebServer(int port) 
+    : server(port), settingsStore(nullptr), cycleController(nullptr), 
       tempSensor(nullptr), uiController(nullptr),
       startCallback(nullptr), stopCallback(nullptr), settingsChangeCallback(nullptr),
       getCurrentTempCallback(nullptr), getMedianTempCallback(nullptr),
@@ -18,9 +18,7 @@ ConfigWebServer::ConfigWebServer()
       getTempOffsetCallback(nullptr) {
 }
 
-void ConfigWebServer::begin(int port) {
-    server = WebServer(port);
-    
+void ConfigWebServer::begin() {
     // Route handlers
     server.on("/", HTTP_GET, [this]() { handleRoot(); });
     server.on("/settings", HTTP_GET, [this]() { handleSettings(); });

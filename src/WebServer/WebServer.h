@@ -12,8 +12,8 @@ class UIController;
 
 class ConfigWebServer {
 public:
-    ConfigWebServer();
-    void begin(int port = 80);
+    ConfigWebServer(int port = 80);
+    void begin();
     void handleClient();
     
     // Callbacks voor data toegang

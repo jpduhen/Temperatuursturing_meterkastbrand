@@ -121,7 +121,7 @@ TempSensor tempSensor(MAX6675_CS, MAX6675_SO, MAX6675_SCK);
 Logger logger;
 CycleController cycleController;
 UIController uiController;
-ConfigWebServer webServer;
+ConfigWebServer webServer(80);
 
 // Kalibratie offset voor MAX6675 (wordt geladen uit Preferences)
 float temp_offset = 0.0; // Kalibratie offset in °C
@@ -2345,7 +2345,7 @@ void setup() {
     webServer.setGetTempOffsetCallback([]() { return temp_offset; });
     
     // Start webserver
-    webServer.begin(80);
+    webServer.begin();
     
     // Toon webserver IP in serial monitor
     Serial.print("Webserver gestart op: http://");
