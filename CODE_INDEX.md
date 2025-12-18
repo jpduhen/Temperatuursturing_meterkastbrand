@@ -58,6 +58,8 @@
   - `saveAndLog(const Settings&, const char* logMsg)` - Sla op en log
   - `loadGoogleCredentials()` - Laad Google credentials
   - `saveGoogleCredentials(const GoogleCredentials&)` - Sla credentials op
+  - `loadCycleCount()` - Laad cyclus_teller uit Preferences (default: 1)
+  - `saveCycleCount(int cycleCount)` - Sla cyclus_teller op in Preferences
 
 #### 3. **TempSensor** (`src/TempSensor/`)
 - **Bestanden:** `TempSensor.h`, `TempSensor.cpp`
@@ -121,7 +123,9 @@
   - `stop()` - Stop cyclus
   - `reset()` - Reset state
   - `setTargetTop(float)`, `setTargetBottom(float)`, `setMaxCycles(int)` - Settings
+  - `setCycleCount(int)` - Stel cyclus_teller in (voor persistentie bij reboot)
   - `setTransitionCallback(TransitionCallback)` - Callback voor faseovergangen
+  - `setCycleCountSaveCallback(CycleCountSaveCallback)` - Callback voor cyclus_teller opslag
   - Getters: `isActive()`, `isHeating()`, `isSystemOff()`, `isSafetyCooling()`, etc.
 
 #### 6. **UIController** (`src/UIController/`)
