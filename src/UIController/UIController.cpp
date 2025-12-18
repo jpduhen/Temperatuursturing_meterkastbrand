@@ -698,7 +698,7 @@ void UIController::createMainScreen() {
     init_status_label = lv_label_create(lv_screen_active());
     lv_label_set_text(init_status_label, "WiFi initialiseren");
     lv_obj_set_style_text_align(init_status_label, LV_TEXT_ALIGN_LEFT, 0);
-    lv_obj_align(init_status_label, LV_ALIGN_TOP_LEFT, 10, 167);
+    lv_obj_align(init_status_label, LV_ALIGN_BOTTOM_LEFT, 10, -50); // Zelfde hoogte als WiFi status en versienummer
     lv_obj_set_style_text_color(init_status_label, lv_color_hex(0x000000), LV_PART_MAIN);
     lv_obj_set_style_text_font(init_status_label, &lv_font_montserrat_14, LV_PART_MAIN);
     

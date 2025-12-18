@@ -50,19 +50,22 @@ Dit project is ontwikkeld voor het onderzoek naar meterkastbranden (kooiklem max
 - **Configureerbare Types**: Per melding type in/uitschakelbaar (START, STOP, transitions, safety, errors, warnings)
 - **NTFY.sh Service**: Gebruikt gratis NTFY.sh service voor push notificaties
 - **Web Interface**: Topic en instellingen configureerbaar via web interface
-- **Persistente Opslag**: Topic en instellingen worden opgeslagen in Preferences
+- **Persistente Opslag**: Topic en alle checkbox-instellingen worden opgeslagen in Preferences en automatisch hersteld bij reboot/herstart
+- **Default Topic**: Standaard topic "VGGM-KOOIKLEM" (configureerbaar via web interface)
 
 ### Beveiligingsfuncties
 1. **Opwarmtijd Beveiliging**: Als opwarmen langer duurt dan 2x de gemiddelde opwarmtijd, wordt veiligheidskoeling geactiveerd en het systeem schakelt uit
 2. **Veiligheidskoeling Naloop**: 2 minuten naloop na veiligheidskoeling om voldoende afkoeling te garanderen
 3. **Temperatuur Stagnatie Detectie**: Als temperatuur langer dan 2 minuten binnen een 3°C bandbreedte blijft, wordt veiligheidskoeling geactiveerd (detecteert losse thermocouple)
+4. **Fasetijd Monitoring**: Automatische monitoring van fasetijden (opwarmen + afkoelen samen). Notificatie wanneer fasetijd meer dan 10% afwijkt van mediaan van laatste 5 fasetijden
 
 ### Instellingen Opslag
 - **Non-volatile Memory**: T_top, T_bottom, cyclus_max, temp_offset worden opgeslagen in Preferences
 - **Google Sheets Credentials**: Client email, project ID, private key, spreadsheet ID worden opgeslagen in Preferences
-- **NTFY Instellingen**: Topic naam en melding type instellingen worden opgeslagen in Preferences
-- **Automatisch Laden**: Instellingen worden automatisch geladen bij opstarten
-- **Automatisch Opslaan**: Instellingen worden automatisch opgeslagen bij wijziging
+- **NTFY Instellingen**: Topic naam en alle checkbox-instellingen (enabled, logInfo, logStart, logStop, logTransition, logSafety, logError, logWarning) worden opgeslagen in Preferences
+- **Cyclus Teller**: Huidige cyclus teller wordt opgeslagen in Preferences voor persistentie bij reboot
+- **Automatisch Laden**: Alle instellingen worden automatisch geladen bij opstarten
+- **Automatisch Opslaan**: Instellingen worden automatisch opgeslagen bij wijziging via web interface of knoppen
 
 ## Software Architectuur
 
@@ -95,10 +98,11 @@ Het project gebruikt een modulaire architectuur met de volgende modules:
 
 5. **CycleController** (`src/CycleController/`)
    - Opwarmen/afkoelen state machine
-   - Beveiligingsfuncties (opwarmtijd, stagnatie detectie)
-   - Cyclus teller
+   - Beveiligingsfuncties (opwarmtijd, stagnatie detectie, fasetijd monitoring)
+   - Cyclus teller (met persistentie)
    - Relais besturing
    - Transition callbacks voor logging
+   - Fasetijd history tracking (laatste 5 fasetijden)
 
 6. **UIController** (`src/UIController/`)
    - LVGL scherm creatie en beheer

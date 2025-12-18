@@ -2224,13 +2224,19 @@ void setup() {
     NtfyNotificationSettings ntfySettings;
     settingsStore.loadNtfySettings(ntfyTopic, sizeof(ntfyTopic), ntfySettings);
     
-    // Initialiseer NTFY notifier
+    // Initialiseer NTFY notifier (altijd, ook als topic leeg is - wordt later ingesteld via web interface)
+    // Settings worden altijd geladen uit Preferences en toegepast
     if (strlen(ntfyTopic) > 0) {
         ntfyNotifier.begin(ntfyTopic);
-        ntfyNotifier.setSettings(ntfySettings);
-        // Koppel NTFY aan logger
-        logger.setNtfyNotifier(&ntfyNotifier);
+    } else {
+        // Als er geen topic is, gebruik default topic maar initialiseer niet (wordt gedaan bij eerste web interface save)
+        // Settings worden wel altijd toegepast
     }
+    // Pas settings altijd toe (ook als notifier nog niet is geïnitialiseerd)
+    ntfyNotifier.setSettings(ntfySettings);
+    
+    // Koppel NTFY aan logger (altijd, ook als notifier nog niet volledig is geïnitialiseerd)
+    logger.setNtfyNotifier(&ntfyNotifier);
     
     // Initialiseer Logger module (handelt Google Sheets client af)
     uiController.showGSStatus("Google Sheets: authenticeren...", false); // Grijs

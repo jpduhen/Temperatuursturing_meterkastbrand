@@ -465,6 +465,12 @@ String ConfigWebServer::generateHTML() {
             outline: none;
             border-color: #667eea;
         }
+        input[type="checkbox"] {
+            width: 18px;
+            height: 18px;
+            margin-right: 8px;
+            flex-shrink: 0;
+        }
         textarea {
             min-height: 100px;
             resize: vertical;
@@ -646,8 +652,8 @@ String ConfigWebServer::generateHTML() {
                 <h2>🔔 NTFY Notificaties</h2>
                 <form id="ntfyForm">
                     <div class="form-group">
-                        <label>
-                            <input type="checkbox" id="ntfyEnabled" name="ntfyEnabled" style="width: auto; margin-right: 8px;">
+                        <label style="display: flex; align-items: center; margin-bottom: 8px;">
+                            <input type="checkbox" id="ntfyEnabled" name="ntfyEnabled">
                             NTFY Notificaties Inschakelen
                         </label>
                         <small style="color: #666; display: block; margin-top: 4px;">Wanneer ingeschakeld, worden alle logs ook als push notificaties verstuurd via NTFY.sh</small>
@@ -663,31 +669,31 @@ String ConfigWebServer::generateHTML() {
                     <div class="form-group">
                         <h3 style="font-size: 16px; margin: 15px 0 10px 0; color: #555;">Melding Types:</h3>
                         <label style="display: flex; align-items: center; margin-bottom: 8px;">
-                            <input type="checkbox" id="ntfyLogInfo" name="ntfyLogInfo" style="width: auto; margin-right: 8px;">
+                            <input type="checkbox" id="ntfyLogInfo" name="ntfyLogInfo">
                             Algemene Log Informatie
                         </label>
                         <label style="display: flex; align-items: center; margin-bottom: 8px;">
-                            <input type="checkbox" id="ntfyLogStart" name="ntfyLogStart" style="width: auto; margin-right: 8px;">
+                            <input type="checkbox" id="ntfyLogStart" name="ntfyLogStart">
                             Systeem Gestart
                         </label>
                         <label style="display: flex; align-items: center; margin-bottom: 8px;">
-                            <input type="checkbox" id="ntfyLogStop" name="ntfyLogStop" style="width: auto; margin-right: 8px;">
+                            <input type="checkbox" id="ntfyLogStop" name="ntfyLogStop">
                             Systeem Gestopt
                         </label>
                         <label style="display: flex; align-items: center; margin-bottom: 8px;">
-                            <input type="checkbox" id="ntfyLogTransition" name="ntfyLogTransition" style="width: auto; margin-right: 8px;">
+                            <input type="checkbox" id="ntfyLogTransition" name="ntfyLogTransition">
                             Fase Overgangen (Verwarmen/Koelen)
                         </label>
                         <label style="display: flex; align-items: center; margin-bottom: 8px;">
-                            <input type="checkbox" id="ntfyLogSafety" name="ntfyLogSafety" style="width: auto; margin-right: 8px;">
+                            <input type="checkbox" id="ntfyLogSafety" name="ntfyLogSafety">
                             Veiligheidsmeldingen
                         </label>
                         <label style="display: flex; align-items: center; margin-bottom: 8px;">
-                            <input type="checkbox" id="ntfyLogError" name="ntfyLogError" style="width: auto; margin-right: 8px;">
+                            <input type="checkbox" id="ntfyLogError" name="ntfyLogError">
                             Foutmeldingen
                         </label>
                         <label style="display: flex; align-items: center; margin-bottom: 8px;">
-                            <input type="checkbox" id="ntfyLogWarning" name="ntfyLogWarning" style="width: auto; margin-right: 8px;">
+                            <input type="checkbox" id="ntfyLogWarning" name="ntfyLogWarning">
                             Waarschuwingen
                         </label>
                     </div>
