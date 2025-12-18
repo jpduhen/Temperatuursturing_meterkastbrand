@@ -33,8 +33,13 @@ CycleController::CycleController()
       veiligheidskoeling_start_tijd(0), veiligheidskoeling_naloop_start_tijd(0),
       last_transition_temp(NAN), laatste_temp_voor_stagnatie(NAN), stagnatie_start_tijd(0),
       gemiddelde_opwarmen_duur(0), opwarmen_telling(0),
+      fase_tijd_history_count(0), fase_tijd_history_index(0),
       T_top(80.0), T_bottom(25.0), cyclus_max(0), cyclus_teller(1),
       relais_koelen_pin(5), relais_verwarming_pin(23) {
+    // Initialiseer fasetijd history array
+    for (int i = 0; i < FASE_TIJD_HISTORY_SIZE; i++) {
+        fase_tijd_history[i] = 0;
+    }
 }
 
 void CycleController::begin(TempSensor* tempSensor, Logger* logger, uint8_t relaisKoelenPin, uint8_t relaisVerwarmingPin) {
@@ -107,6 +112,13 @@ void CycleController::start() {
     // Opslaan reset cyclus_teller (via callback)
     if (cycleCountSaveCallback) {
         cycleCountSaveCallback(cyclus_teller);
+    }
+    
+    // Reset fasetijd history bij nieuwe start
+    fase_tijd_history_count = 0;
+    fase_tijd_history_index = 0;
+    for (int i = 0; i < FASE_TIJD_HISTORY_SIZE; i++) {
+        fase_tijd_history[i] = 0;
     }
 }
 
@@ -255,6 +267,10 @@ void CycleController::logTransition(const char* status, float temp) {
             formatTijdChar(last_koelen_duur, fase_tijd_str, sizeof(fase_tijd_str));
             log_timestamp_ms = last_koelen_start_tijd;
             
+            // Voeg afkoelen fasetijd toe aan history en controleer afwijking
+            addFaseTijdToHistory(last_koelen_duur);
+            checkFaseTijdDeviation(last_koelen_duur);
+            
             if (last_opwarmen_duur > 0) {
                 unsigned long totaal_cyclus_duur = last_opwarmen_duur + last_koelen_duur;
                 formatTijdChar(totaal_cyclus_duur, cyclus_tijd_str, sizeof(cyclus_tijd_str));
@@ -274,6 +290,10 @@ void CycleController::logTransition(const char* status, float temp) {
         if (last_opwarmen_duur > 0 && last_opwarmen_start_tijd > 0) {
             formatTijdChar(last_opwarmen_duur, fase_tijd_str, sizeof(fase_tijd_str));
             log_timestamp_ms = last_opwarmen_start_tijd;
+            
+            // Voeg opwarmen fasetijd toe aan history en controleer afwijking
+            addFaseTijdToHistory(last_opwarmen_duur);
+            checkFaseTijdDeviation(last_opwarmen_duur);
         } else {
             resetFaseTijd(fase_tijd_str, sizeof(fase_tijd_str));
         }
@@ -518,4 +538,110 @@ void CycleController::stopAll() {
     systeem_uit = true;
     cyclus_actief = false;
     verwarmen_actief = false; // Reset verwarmen_actief om te voorkomen dat cyclus weer start
+}
+
+void CycleController::addFaseTijdToHistory(unsigned long fase_tijd_ms) {
+    if (fase_tijd_ms == 0) {
+        return; // Skip 0 waarden
+    }
+    
+    // Voeg toe aan history (circular buffer)
+    fase_tijd_history[fase_tijd_history_index] = fase_tijd_ms;
+    fase_tijd_history_index = (fase_tijd_history_index + 1) % FASE_TIJD_HISTORY_SIZE;
+    
+    if (fase_tijd_history_count < FASE_TIJD_HISTORY_SIZE) {
+        fase_tijd_history_count++;
+    }
+}
+
+unsigned long CycleController::calculateMedianFaseTijd() const {
+    if (fase_tijd_history_count == 0) {
+        return 0;
+    }
+    
+    // Maak een kopie van de history array voor sortering
+    unsigned long sorted[FASE_TIJD_HISTORY_SIZE];
+    int count = 0;
+    for (int i = 0; i < fase_tijd_history_count; i++) {
+        if (fase_tijd_history[i] > 0) {
+            sorted[count++] = fase_tijd_history[i];
+        }
+    }
+    
+    if (count == 0) {
+        return 0;
+    }
+    
+    // Bubble sort (eenvoudig voor kleine arrays)
+    for (int i = 0; i < count - 1; i++) {
+        for (int j = 0; j < count - i - 1; j++) {
+            if (sorted[j] > sorted[j + 1]) {
+                unsigned long temp = sorted[j];
+                sorted[j] = sorted[j + 1];
+                sorted[j + 1] = temp;
+            }
+        }
+    }
+    
+    // Bereken mediaan
+    if (count % 2 == 0) {
+        // Even aantal: gemiddelde van twee middelste waarden
+        return (sorted[count / 2 - 1] + sorted[count / 2]) / 2;
+    } else {
+        // Oneven aantal: middelste waarde
+        return sorted[count / 2];
+    }
+}
+
+void CycleController::checkFaseTijdDeviation(unsigned long current_fase_tijd_ms) {
+    if (current_fase_tijd_ms == 0 || logger == nullptr) {
+        return;
+    }
+    
+    // We hebben minimaal 5 fasetijden nodig voor betrouwbare mediaan
+    if (fase_tijd_history_count < FASE_TIJD_HISTORY_SIZE) {
+        return;
+    }
+    
+    unsigned long median = calculateMedianFaseTijd();
+    if (median == 0) {
+        return;
+    }
+    
+    // Bereken afwijking percentage
+    float deviation = 0.0;
+    if (current_fase_tijd_ms > median) {
+        deviation = ((float)(current_fase_tijd_ms - median) / (float)median) * 100.0;
+    } else {
+        deviation = ((float)(median - current_fase_tijd_ms) / (float)median) * 100.0;
+    }
+    
+    // Als afwijking > 10%, verstuur notificatie
+    if (deviation > 10.0) {
+        char fase_tijd_str[10];
+        char median_str[10];
+        formatTijdChar(current_fase_tijd_ms, fase_tijd_str, sizeof(fase_tijd_str));
+        formatTijdChar(median, median_str, sizeof(median_str));
+        
+        // Maak notificatie bericht
+        char status[100];
+        snprintf(status, sizeof(status), "Beveiliging: Fasetijd afwijking %.1f%% (huidig: %s, mediaan: %s)", 
+                 deviation, fase_tijd_str, median_str);
+        
+        // Verstuur via logger (dit zal automatisch NTFY notificatie triggeren)
+        LogRequest req;
+        strncpy(req.status, status, sizeof(req.status) - 1);
+        req.status[sizeof(req.status) - 1] = '\0';
+        req.temp = getCriticalTemp();
+        req.cyclus_teller = cyclus_teller;
+        req.cyclus_max = cyclus_max;
+        req.T_top = T_top;
+        req.T_bottom = T_bottom;
+        strncpy(req.fase_tijd, fase_tijd_str, sizeof(req.fase_tijd) - 1);
+        req.fase_tijd[sizeof(req.fase_tijd) - 1] = '\0';
+        req.cyclus_tijd[0] = '\0';
+        req.timestamp_ms = millis();
+        
+        logger->log(req);
+    }
 }

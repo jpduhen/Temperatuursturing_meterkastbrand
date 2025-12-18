@@ -556,7 +556,7 @@ String ConfigWebServer::generateHTML() {
     <div class="container">
         <div class="header">
             <h1>🌡️ Temperatuur Cyclus Controller</h1>
-            <p>Versie 4.02</p>
+            <p>Versie 4.03</p>
         </div>
         <div class="content">
             <div id="message" class="message"></div>

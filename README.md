@@ -214,7 +214,7 @@ Het project gebruikt een modulaire architectuur met de volgende modules:
 
 Zie [CHANGELOG.md](CHANGELOG.md) voor gedetailleerde versie geschiedenis.
 
-**Huidige Versie**: 4.02
+**Huidige Versie**: 4.03
 
 ## Licentie
 

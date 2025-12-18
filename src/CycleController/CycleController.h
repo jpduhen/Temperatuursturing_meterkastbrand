@@ -78,6 +78,17 @@ private:
     unsigned long gemiddelde_opwarmen_duur;
     int opwarmen_telling;
     
+    // Fasetijd monitoring (laatste 5 fasetijden: opwarmen + afkoelen samen)
+    static const int FASE_TIJD_HISTORY_SIZE = 5;
+    unsigned long fase_tijd_history[FASE_TIJD_HISTORY_SIZE];
+    int fase_tijd_history_count;
+    int fase_tijd_history_index;
+    
+    // Helper functies voor fasetijd monitoring
+    void addFaseTijdToHistory(unsigned long fase_tijd_ms);
+    unsigned long calculateMedianFaseTijd() const;
+    void checkFaseTijdDeviation(unsigned long current_fase_tijd_ms);
+    
     // Settings
     float T_top;
     float T_bottom;

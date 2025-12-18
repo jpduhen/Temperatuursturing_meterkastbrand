@@ -1,4 +1,4 @@
-/*  versie 4.02
+/*  versie 4.03
     Jan Pieter Duhen
     Meterkastbrand onderzoek: Kooiklem maximaaltest
 
@@ -84,7 +84,7 @@
 
 // Versienummer - VERHOOG BIJ ELKE WIJZIGING
 #define FIRMWARE_VERSION_MAJOR 4
-#define FIRMWARE_VERSION_MINOR 2
+#define FIRMWARE_VERSION_MINOR 3
 
 // Temperatuur constanten
 #define TEMP_SAFE_THRESHOLD 37.0        // Temperatuur grens voor veilig aanraken (groen < 37°C, rood >= 37°C)
@@ -2251,16 +2251,16 @@ void setup() {
       if (logger.isTokenReady()) {
         uiController.showGSStatus("Google Sheets: GEREED", false); // Grijs (succes)
         g_googleAuthTokenReady = true; // Update globale variabele voor backward compatibility
-        delay(1000); // Korte pauze
-      } else {
-        uiController.showGSStatus("Google Sheets: MISLUKT", true); // Rood (fout)
-        delay(1000);
-      }
+      delay(1000); // Korte pauze
     } else {
-      uiController.showGSStatus("Google Sheets: MISLUKT", true); // Rood (fout)
+        uiController.showGSStatus("Google Sheets: MISLUKT", true); // Rood (fout)
       delay(1000);
     }
-    
+  } else {
+      uiController.showGSStatus("Google Sheets: MISLUKT", true); // Rood (fout)
+    delay(1000);
+  }
+  
     // STAP 2: Start nu AP voor web interface (alleen als WiFi Station verbonden is)
     // Zet WiFi in AP+STA mode (zodat we tegelijk verbonden kunnen zijn met extern netwerk EN een eigen AP hebben)
     WiFi.mode(WIFI_AP_STA);
