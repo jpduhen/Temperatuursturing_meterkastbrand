@@ -98,9 +98,9 @@ void ConfigWebServer::handleSettings() {
     // NTFY instellingen
     if (getNtfyTopicCallback) {
         const char* topic = getNtfyTopicCallback();
-        response += ",\"ntfyTopic\":\"" + String(topic ? topic : "") + "\"";
+        response += ",\"ntfyTopic\":\"" + String(topic ? topic : "VGGM-KOOIKLEM") + "\"";
     } else {
-        response += ",\"ntfyTopic\":\"\"";
+        response += ",\"ntfyTopic\":\"VGGM-KOOIKLEM\"";
     }
     
     if (getNtfySettingsCallback) {
@@ -555,7 +555,7 @@ String ConfigWebServer::generateHTML() {
     <div class="container">
         <div class="header">
             <h1>🌡️ Temperatuur Cyclus Controller</h1>
-            <p>Versie 4.00</p>
+            <p>Versie 4.01</p>
         </div>
         <div class="content">
             <div id="message" class="message"></div>
@@ -654,7 +654,7 @@ String ConfigWebServer::generateHTML() {
                     <div class="form-group">
                         <label for="ntfyTopic">NTFY Topic:</label>
                         <div class="input-with-button">
-                            <input type="text" id="ntfyTopic" name="ntfyTopic" maxlength="63" placeholder="mijn-temperatuur-monitor" required style="flex: 1; width: auto !important;">
+                            <input type="text" id="ntfyTopic" name="ntfyTopic" maxlength="63" placeholder="VGGM-KOOIKLEM" required style="flex: 1; width: auto !important;">
                             <button type="button" id="ntfyResetBtn" style="background: #2196F3; color: #fff; border: none; border-radius: 6px; cursor: pointer; font-weight: 500; padding: 12px 20px; font-size: 14px; white-space: nowrap; flex: 0 0 auto !important;">Standaard</button>
                         </div>
                         <small style="color: #666; display: block; margin-top: 4px;">Het NTFY topic waarop notificaties worden verstuurd. Abonneer je op dit topic in de NTFY app om notificaties te ontvangen.</small>
@@ -859,8 +859,8 @@ String ConfigWebServer::generateHTML() {
         });
         
         function resetNtfyTopic() {
-            // Genereer een default topic (kan later worden vervangen door backend endpoint)
-            const defaultTopic = 'temp-monitor-' + Math.random().toString(36).substring(2, 10);
+            // Reset naar standaard topic
+            const defaultTopic = 'VGGM-KOOIKLEM';
             document.getElementById('ntfyTopic').value = defaultTopic;
             showMessage('NTFY topic gereset naar standaard', false);
         }

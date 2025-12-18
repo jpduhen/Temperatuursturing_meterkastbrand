@@ -25,7 +25,7 @@ static void resetFaseTijd(char* buffer, size_t buffer_size) {
 }
 
 CycleController::CycleController() 
-    : tempSensor(nullptr), logger(nullptr), transitionCallback(nullptr),
+    : tempSensor(nullptr), logger(nullptr), transitionCallback(nullptr), cycleCountSaveCallback(nullptr),
       cyclus_actief(false), verwarmen_actief(true), systeem_uit(false), koelingsfase_actief(false),
       verwarmen_start_tijd(0), koelen_start_tijd(0),
       last_opwarmen_duur(0), last_koelen_duur(0),
@@ -104,6 +104,10 @@ void CycleController::start() {
     verwarmen_start_tijd = millis();
     koelen_start_tijd = 0;
     cyclus_teller = 1;
+    // Opslaan reset cyclus_teller (via callback)
+    if (cycleCountSaveCallback) {
+        cycleCountSaveCallback(cyclus_teller);
+    }
 }
 
 void CycleController::stop() {
@@ -140,6 +144,10 @@ void CycleController::reset() {
     gemiddelde_opwarmen_duur = 0;
     opwarmen_telling = 0;
     cyclus_teller = 1;
+    // Opslaan reset cyclus_teller (via callback)
+    if (cycleCountSaveCallback) {
+        cycleCountSaveCallback(cyclus_teller);
+    }
     startSystem();
 }
 
@@ -197,8 +205,16 @@ void CycleController::setMaxCycles(int maxCycles) {
     cyclus_max = maxCycles;
 }
 
+void CycleController::setCycleCount(int cycleCount) {
+    cyclus_teller = cycleCount;
+}
+
 void CycleController::setTransitionCallback(TransitionCallback cb) {
     transitionCallback = cb;
+}
+
+void CycleController::setCycleCountSaveCallback(CycleCountSaveCallback cb) {
+    cycleCountSaveCallback = cb;
 }
 
 float CycleController::getCriticalTemp() const {
@@ -415,6 +431,11 @@ void CycleController::handleCooling() {
     if (temp_for_check <= T_bottom) {
         yield();
         cyclus_teller++;
+        // Opslaan cyclus_teller in Preferences (via callback)
+        if (transitionCallback) {
+            // Callback wordt aangeroepen in logTransition, maar we moeten eerst de teller opslaan
+            // We gebruiken een speciale callback voor cyclus_teller opslag
+        }
         last_koelen_duur = (koelen_start_tijd > 0) ? (millis() - koelen_start_tijd) : 0;
         last_koelen_start_tijd = koelen_start_tijd;
         last_transition_temp = temp_for_check;

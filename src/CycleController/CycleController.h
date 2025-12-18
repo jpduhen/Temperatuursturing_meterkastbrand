@@ -31,10 +31,13 @@ public:
     void setTargetTop(float tTop);
     void setTargetBottom(float tBottom);
     void setMaxCycles(int maxCycles);
+    void setCycleCount(int cycleCount);  // Voor persistentie bij reboot
     
     // Callbacks
     typedef void (*TransitionCallback)(const char* status, float temp, unsigned long timestamp);
     void setTransitionCallback(TransitionCallback cb);
+    typedef void (*CycleCountSaveCallback)(int cycleCount);
+    void setCycleCountSaveCallback(CycleCountSaveCallback cb);
 
 private:
     void handleHeating();
@@ -48,6 +51,7 @@ private:
     TempSensor* tempSensor;
     Logger* logger;
     TransitionCallback transitionCallback;
+    CycleCountSaveCallback cycleCountSaveCallback;
     
     // State variabelen
     bool cyclus_actief;

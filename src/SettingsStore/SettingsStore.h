@@ -48,6 +48,10 @@ public:
     // NTFY instellingen
     void loadNtfySettings(char* topic, size_t topicSize, NtfyNotificationSettings& settings);
     void saveNtfySettings(const char* topic, const NtfyNotificationSettings& settings);
+    
+    // Cyclus teller (voor persistentie bij reboot)
+    int loadCycleCount();
+    void saveCycleCount(int cycleCount);
 
 private:
     Preferences prefs;
@@ -55,6 +59,7 @@ private:
     static const char* PREF_KEY_T_TOP;
     static const char* PREF_KEY_T_BOTTOM;
     static const char* PREF_KEY_CYCLUS_MAX;
+    static const char* PREF_KEY_CYCLUS_TELLER;
     static const char* PREF_KEY_TEMP_OFFSET;
     static const char* PREF_KEY_CLIENT_EMAIL;
     static const char* PREF_KEY_PROJECT_ID;

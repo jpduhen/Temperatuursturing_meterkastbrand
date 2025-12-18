@@ -1,4 +1,4 @@
-/*  versie 4.00
+/*  versie 4.01
     Jan Pieter Duhen
     Meterkastbrand onderzoek: Kooiklem maximaaltest
 
@@ -84,7 +84,7 @@
 
 // Versienummer - VERHOOG BIJ ELKE WIJZIGING
 #define FIRMWARE_VERSION_MAJOR 4
-#define FIRMWARE_VERSION_MINOR 0
+#define FIRMWARE_VERSION_MINOR 1
 
 // Temperatuur constanten
 #define TEMP_SAFE_THRESHOLD 37.0        // Temperatuur grens voor veilig aanraken (groen < 37°C, rood >= 37°C)
@@ -2011,11 +2011,15 @@ void setup() {
   settingsStore.begin();
   loadSettings();
   
+  // Laad cyclus_teller uit Preferences (voor persistentie bij reboot)
+  int saved_cyclus_teller = settingsStore.loadCycleCount();
+  
   // Initialiseer CycleController (na loadSettings zodat settings beschikbaar zijn)
   cycleController.begin(&tempSensor, &logger, RELAIS_KOELEN, RELAIS_VERWARMING);
   cycleController.setTargetTop(T_top);
   cycleController.setTargetBottom(T_bottom);
   cycleController.setMaxCycles(cyclus_max);
+  cycleController.setCycleCount(saved_cyclus_teller); // Herstel cyclus_teller na reboot
   
   // Stel callback in voor logging (CycleController gebruikt logTransition() intern)
   cycleController.setTransitionCallback([](const char* status, float temp, unsigned long timestamp) {
@@ -2023,16 +2027,9 @@ void setup() {
     // Deze callback kan gebruikt worden voor extra acties indien nodig
   });
   
-  // Initialiseer CycleController (na loadSettings zodat settings beschikbaar zijn)
-  cycleController.begin(&tempSensor, &logger, RELAIS_KOELEN, RELAIS_VERWARMING);
-  cycleController.setTargetTop(T_top);
-  cycleController.setTargetBottom(T_bottom);
-  cycleController.setMaxCycles(cyclus_max);
-  
-  // Stel callback in voor logging (CycleController gebruikt logTransition() intern)
-  cycleController.setTransitionCallback([](const char* status, float temp, unsigned long timestamp) {
-    // CycleController handelt logging zelf af via logTransition()
-    // Deze callback kan gebruikt worden voor extra acties indien nodig
+  // Stel callback in voor cyclus_teller opslag (voor persistentie bij reboot)
+  cycleController.setCycleCountSaveCallback([](int cycleCount) {
+    settingsStore.saveCycleCount(cycleCount);
   });
 
   // Initialize GPIO pins for relais

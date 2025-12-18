@@ -4,6 +4,7 @@ const char* SettingsStore::PREF_NAMESPACE = "tempctrl";
 const char* SettingsStore::PREF_KEY_T_TOP = "t_top";
 const char* SettingsStore::PREF_KEY_T_BOTTOM = "t_bottom";
 const char* SettingsStore::PREF_KEY_CYCLUS_MAX = "cyclus_max";
+const char* SettingsStore::PREF_KEY_CYCLUS_TELLER = "cyclus_teller";
 const char* SettingsStore::PREF_KEY_TEMP_OFFSET = "temp_offset";
 const char* SettingsStore::PREF_KEY_CLIENT_EMAIL = "client_email";
 const char* SettingsStore::PREF_KEY_PROJECT_ID = "project_id";
@@ -110,10 +111,12 @@ void SettingsStore::saveAndLog(const Settings& settings, const char* logMsg) {
 void SettingsStore::loadNtfySettings(char* topic, size_t topicSize, NtfyNotificationSettings& settings) {
     prefs.begin(PREF_NAMESPACE, false);
     
-    // Laad NTFY topic (default: lege string)
+    // Laad NTFY topic (default: "VGGM-KOOIKLEM")
     size_t topicLen = prefs.getString(PREF_KEY_NTFY_TOPIC, topic, topicSize);
     if (topicLen == 0 || topicLen >= topicSize) {
-        topic[0] = '\0';
+        // Als er geen topic is opgeslagen, gebruik default
+        strncpy(topic, "VGGM-KOOIKLEM", topicSize - 1);
+        topic[topicSize - 1] = '\0';
     }
     
     // Laad melding instellingen (default: alles aan)
@@ -147,6 +150,19 @@ void SettingsStore::saveNtfySettings(const char* topic, const NtfyNotificationSe
     prefs.putBool(PREF_KEY_NTFY_LOG_ERROR, settings.logError);
     prefs.putBool(PREF_KEY_NTFY_LOG_WARNING, settings.logWarning);
     
+    prefs.end();
+}
+
+int SettingsStore::loadCycleCount() {
+    prefs.begin(PREF_NAMESPACE, false);
+    int cycleCount = prefs.getInt(PREF_KEY_CYCLUS_TELLER, 1); // Default: 1 (eerste cyclus)
+    prefs.end();
+    return cycleCount;
+}
+
+void SettingsStore::saveCycleCount(int cycleCount) {
+    prefs.begin(PREF_NAMESPACE, false);
+    prefs.putInt(PREF_KEY_CYCLUS_TELLER, cycleCount);
     prefs.end();
 }
 
