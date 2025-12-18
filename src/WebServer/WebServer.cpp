@@ -378,7 +378,8 @@ String ConfigWebServer::generateStatusJSON() {
 }
 
 String ConfigWebServer::generateHTML() {
-    String html = R"(
+    // HTML string in PROGMEM (flash memory) om DRAM te besparen
+    static const char html_template[] PROGMEM = R"(
 <!DOCTYPE html>
 <html lang="nl">
 <head>
@@ -555,7 +556,7 @@ String ConfigWebServer::generateHTML() {
     <div class="container">
         <div class="header">
             <h1>🌡️ Temperatuur Cyclus Controller</h1>
-            <p>Versie 4.01</p>
+            <p>Versie 4.02</p>
         </div>
         <div class="content">
             <div id="message" class="message"></div>
@@ -916,6 +917,11 @@ String ConfigWebServer::generateHTML() {
 </body>
 </html>
 )";
+    
+    // Kopieer van PROGMEM naar String (tijdelijk op stack/heap tijdens send)
+    String html;
+    html.reserve(strlen_P(html_template) + 1);
+    html = FPSTR(html_template);
     return html;
 }
 

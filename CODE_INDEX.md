@@ -1,6 +1,6 @@
 # Code Index - Arduino Temperatuur Cyclus Controller
 
-**Versie:** 4.01  
+**Versie:** 4.02  
 **Platform:** ESP32 (CYD 2.8 inch display)  
 **Hardware:** MAX6675 thermocouple, LVGL graphics, touchscreen, SSR relais  
 **Architectuur:** Modulair (8 modules)

@@ -1,8 +1,5 @@
 #include "NtfyNotifier.h"
 
-// Static buffer voor HTTP responses
-char NtfyNotifier::httpResponseBuffer[512];
-
 NtfyNotifier::NtfyNotifier() {
     ntfyTopic[0] = '\0';
 }
@@ -161,30 +158,11 @@ bool NtfyNotifier::sendInternal(const char* title, const char* message, const ch
     int code = http.POST(message);
     
     // Haal response alleen op bij succes (bespaar geheugen)
+    // Verklein buffer om DRAM te besparen - we hebben de volledige response niet nodig
     if (code == 200 || code == 201) {
-        WiFiClient* stream = http.getStreamPtr();
-        if (stream != nullptr) {
-            size_t totalLen = 0;
-            while (stream->available() && totalLen < (sizeof(httpResponseBuffer) - 1)) {
-                size_t bytesRead = stream->readBytes((uint8_t*)(httpResponseBuffer + totalLen), sizeof(httpResponseBuffer) - 1 - totalLen);
-                totalLen += bytesRead;
-            }
-            httpResponseBuffer[totalLen] = '\0';
-            if (totalLen > 0) {
-                Serial.printf("[NTFY] Response: %s\n", httpResponseBuffer);
-            }
-        } else {
-            // Fallback: gebruik getString() maar kopieer direct naar buffer
-            String response = http.getString();
-            if (response.length() > 0) {
-                size_t len = response.length();
-                if (len < sizeof(httpResponseBuffer)) {
-                    strncpy(httpResponseBuffer, response.c_str(), sizeof(httpResponseBuffer) - 1);
-                    httpResponseBuffer[sizeof(httpResponseBuffer) - 1] = '\0';
-                    Serial.printf("[NTFY] Response: %s\n", httpResponseBuffer);
-                }
-            }
-        }
+        // Skip response lezen - we hebben alleen de status code nodig
+        // Dit bespaart ~512 bytes DRAM
+        Serial.printf("[NTFY] Bericht succesvol verstuurd! (code: %d)\n", code);
     }
     
     http.end();

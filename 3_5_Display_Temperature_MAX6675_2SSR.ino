@@ -1,4 +1,4 @@
-/*  versie 4.01
+/*  versie 4.02
     Jan Pieter Duhen
     Meterkastbrand onderzoek: Kooiklem maximaaltest
 
@@ -84,7 +84,7 @@
 
 // Versienummer - VERHOOG BIJ ELKE WIJZIGING
 #define FIRMWARE_VERSION_MAJOR 4
-#define FIRMWARE_VERSION_MINOR 1
+#define FIRMWARE_VERSION_MINOR 2
 
 // Temperatuur constanten
 #define TEMP_SAFE_THRESHOLD 37.0        // Temperatuur grens voor veilig aanraken (groen < 37°C, rood >= 37°C)
@@ -2378,25 +2378,23 @@ void setup() {
     webServer.setGetTempOffsetCallback([]() { return temp_offset; });
     
     // Google credentials getters (laad uit Preferences)
+    // Gebruik één gedeeld static object om DRAM te besparen
+    static GoogleCredentials sharedCreds;
     webServer.setGetClientEmailCallback([]() -> const char* {
-      static GoogleCredentials creds;
-      creds = settingsStore.loadGoogleCredentials();
-      return (const char*)creds.clientEmail;
+      sharedCreds = settingsStore.loadGoogleCredentials();
+      return (const char*)sharedCreds.clientEmail;
     });
     webServer.setGetProjectIdCallback([]() -> const char* {
-      static GoogleCredentials creds;
-      creds = settingsStore.loadGoogleCredentials();
-      return (const char*)creds.projectId;
+      sharedCreds = settingsStore.loadGoogleCredentials();
+      return (const char*)sharedCreds.projectId;
     });
     webServer.setGetPrivateKeyCallback([]() -> const char* {
-      static GoogleCredentials creds;
-      creds = settingsStore.loadGoogleCredentials();
-      return (const char*)creds.privateKey;
+      sharedCreds = settingsStore.loadGoogleCredentials();
+      return (const char*)sharedCreds.privateKey;
     });
     webServer.setGetSpreadsheetIdCallback([]() -> const char* {
-      static GoogleCredentials creds;
-      creds = settingsStore.loadGoogleCredentials();
-      return (const char*)creds.spreadsheetId;
+      sharedCreds = settingsStore.loadGoogleCredentials();
+      return (const char*)sharedCreds.spreadsheetId;
     });
     
     // NTFY callbacks

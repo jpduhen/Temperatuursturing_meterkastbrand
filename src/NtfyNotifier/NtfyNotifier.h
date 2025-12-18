@@ -64,7 +64,6 @@ public:
 private:
     char ntfyTopic[64];              // NTFY topic (max 63 karakters)
     NtfyNotificationSettings settings;
-    static char httpResponseBuffer[512];  // Static buffer voor HTTP responses
     
     bool sendInternal(const char* title, const char* message, const char* colorTag);
     const char* getColorTagForType(NtfyNotificationType type) const;
