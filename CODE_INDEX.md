@@ -640,6 +640,7 @@ uiController.updateGraph() [Elke 500ms of bij nieuwe data]
   - `ntfy_log_safety` (bool) - LOG_SAFETY meldingen
   - `ntfy_log_error` (bool) - LOG_ERROR meldingen
   - `ntfy_log_warning` (bool) - LOG_WARNING meldingen
+  - `cyclus_teller` (int) - Huidige cyclus teller (voor persistentie bij reboot)
 
 **Load Flow (`SettingsStore::load()`):**
 ```
