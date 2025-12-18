@@ -1,4 +1,4 @@
-/*  versie 3.98
+/*  versie 4.00
     Jan Pieter Duhen
     Meterkastbrand onderzoek: Kooiklem maximaaltest
 
@@ -59,7 +59,7 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <freertos/queue.h>
-#include <Preferences.h>  // Voor opslag van instellingen in non-volatile memory
+// Preferences worden nu beheerd door SettingsStore module
 #include <MAX6675.h>
 #include "src/SystemClock/SystemClock.h"
 #include "src/SettingsStore/SettingsStore.h"
@@ -67,6 +67,7 @@
 #include "src/Logger/Logger.h"
 #include "src/CycleController/CycleController.h"
 #include "src/UIController/UIController.h"
+#include "src/NtfyNotifier/NtfyNotifier.h"
 // Include WebServer.h moet NA andere includes om naamconflict te voorkomen
 #include "src/WebServer/WebServer.h"
 /* --- Rob Tillaart MAX6675 (software SPI) ---
@@ -82,8 +83,8 @@
 #define RELAIS_VERWARMING 23 // SSR voor verwarming (HIGH = verwarming aan, LOW = uit)
 
 // Versienummer - VERHOOG BIJ ELKE WIJZIGING
-#define FIRMWARE_VERSION_MAJOR 3
-#define FIRMWARE_VERSION_MINOR 98
+#define FIRMWARE_VERSION_MAJOR 4
+#define FIRMWARE_VERSION_MINOR 0
 
 // Temperatuur constanten
 #define TEMP_SAFE_THRESHOLD 37.0        // Temperatuur grens voor veilig aanraken (groen < 37°C, rood >= 37°C)
@@ -121,6 +122,7 @@ TempSensor tempSensor(MAX6675_CS, MAX6675_SO, MAX6675_SCK);
 Logger logger;
 CycleController cycleController;
 UIController uiController;
+NtfyNotifier ntfyNotifier;
 ConfigWebServer webServer(80);
 
 // Kalibratie offset voor MAX6675 (wordt geladen uit Preferences)
@@ -200,13 +202,7 @@ float T_bottom = 25.0;     // Onderste temperatuur voor koelen (default, wordt g
 int cyclus_teller = 1;     // Huidige cyclus (start bij 1)
 int cyclus_max = 0;        // Maximaal aantal cycli (0 = oneindig) (default, wordt geladen uit Preferences)
 
-// Preferences object voor opslag van instellingen
-Preferences preferences;
-#define PREF_NAMESPACE "tempctrl"  // Namespace voor Preferences
-#define PREF_KEY_T_TOP "t_top"
-#define PREF_KEY_T_BOTTOM "t_bottom"
-#define PREF_KEY_CYCLUS_MAX "cyclus_max"
-#define PREF_KEY_TEMP_OFFSET "temp_offset"  // Kalibratie offset voor MAX6675
+// Preferences worden nu beheerd door SettingsStore module
 bool cyclus_actief = false; // Of er een cyclus draait
 bool verwarmen_actief = true; // true = verwarmen, false = koelen
 bool systeem_uit = false;  // Of het systeem uitgeschakeld is
@@ -276,7 +272,7 @@ TaskHandle_t loggingTaskHandle = nullptr;
 // VERPLAATST NAAR Logger module - forward declaration verwijderd
 
 // Preferences functies voor opslag van instellingen
-// VERPLAATST NAAR SettingsStore module - functies blijven tijdelijk voor backward compatibility
+// Wrapper functies voor backward compatibility - SettingsStore module handelt de daadwerkelijke opslag af
 void loadSettings() {
   Settings settings = settingsStore.load();
   T_top = settings.tTop;
@@ -2175,52 +2171,31 @@ void setup() {
   uiController.showInitStatus("WiFi initialiseren", 0x000000); // Zwart
   
   // ---- WiFi en Google Sheets initialisatie ----
-  // WiFiManager voor WiFi configuratie
+  // STAP 1: Probeer eerst WiFi Station verbinding (nodig voor Google Sheets logging)
+  WiFi.mode(WIFI_STA); // Start in Station mode
+  
+  // WiFiManager voor WiFi Station configuratie
   WiFiManager wm;
   wm.setConfigPortalTimeout(180); // Timeout na 3 minuten
   
   // Callback voor wanneer config portal (AP) wordt gestart
   wm.setAPCallback([](WiFiManager *myWiFiManager) {
     IPAddress apIP = WiFi.softAPIP();
-    
-    // Update init status tekst met AP IP
-    // BELANGRIJK: Gebruik char array i.p.v. String om heap fragmentatie te voorkomen
-    char apText[64];
-    snprintf(apText, sizeof(apText), "Stel WiFi in via AP op %s", apIP.toString().c_str());
-    uiController.showInitStatus(apText, 0x000000); // Zwart
-    
-    // Force LVGL update zodat tekst direct zichtbaar is
-    lv_task_handler();
-    
-    // Update WiFi status
     char apStatus[64];
-    snprintf(apStatus, sizeof(apStatus), "WiFi: AP actief [%s]", apIP.toString().c_str());
+    snprintf(apStatus, sizeof(apStatus), "WiFi: Config AP [%s]", apIP.toString().c_str());
     showWifiStatus(apStatus, false); // Grijs
-    
-    // Nog een keer LVGL update voor WiFi status
     lv_task_handler();
   });
   
-  // Probeer verbinding te maken met opgeslagen credentials
+  // Probeer verbinding te maken met opgeslagen Station credentials
   showWifiStatus("WiFi: verbinden...", false); // Grijs
   lv_task_handler(); // Update display
   
-  bool res = wm.autoConnect("ESP32-TemperatuurCyclus");
-  
-  // Controleer of AP actief is (als autoConnect mislukt, kan AP nog actief zijn)
-  if (WiFi.getMode() == WIFI_AP || WiFi.getMode() == WIFI_AP_STA) {
-    IPAddress apIP = WiFi.softAPIP();
-    if (apIP != IPAddress(0, 0, 0, 0)) {
-      // BELANGRIJK: Gebruik char array i.p.v. String om heap fragmentatie te voorkomen
-      char apText[64];
-      snprintf(apText, sizeof(apText), "Stel WiFi in via AP op %s", apIP.toString().c_str());
-      showInitStatus(apText, 0x000000); // Zwart
-      lv_task_handler(); // Force display update
-    }
-  }
+  bool res = wm.autoConnect("ESP32-TC");
   
   if (!res) {
-    uiController.showWifiStatus("WiFi: MISLUKT - herstart", true); // Rood (fout)
+    // Geen Station verbinding - Google Sheets logging werkt niet
+    uiController.showWifiStatus("WiFi Station: geen verbinding", true); // Rood (fout)
     // Blijf doorgaan zonder WiFi - logging werkt dan niet
   }
   
@@ -2229,6 +2204,7 @@ void setup() {
     uiController.hideInitStatus();
     
     // BELANGRIJK: Gebruik char array i.p.v. String om heap fragmentatie te voorkomen
+    // Toon SSID en Station IP
     char wifiInfo[128];
     snprintf(wifiInfo, sizeof(wifiInfo), "WiFi: %s (%s)", 
              WiFi.SSID().c_str(), WiFi.localIP().toString().c_str());
@@ -2239,9 +2215,29 @@ void setup() {
     systemClock.begin(3600); // GMT offset: +1 uur (3600 seconden), geen daylight saving offset
     systemClock.sync(); // Synchroniseer NTP tijd
     
+    // Laad Google credentials uit Preferences (als beschikbaar)
+    GoogleCredentials creds = settingsStore.loadGoogleCredentials();
+    const char* clientEmail = (strlen(creds.clientEmail) > 0) ? creds.clientEmail : CLIENT_EMAIL;
+    const char* projectId = (strlen(creds.projectId) > 0) ? creds.projectId : PROJECT_ID;
+    const char* privateKey = (strlen(creds.privateKey) > 0) ? creds.privateKey : PRIVATE_KEY;
+    const char* spreadsheetId = (strlen(creds.spreadsheetId) > 0) ? creds.spreadsheetId : SPREADSHEET_ID;
+    
+    // Laad NTFY instellingen
+    char ntfyTopic[64] = "";
+    NtfyNotificationSettings ntfySettings;
+    settingsStore.loadNtfySettings(ntfyTopic, sizeof(ntfyTopic), ntfySettings);
+    
+    // Initialiseer NTFY notifier
+    if (strlen(ntfyTopic) > 0) {
+        ntfyNotifier.begin(ntfyTopic);
+        ntfyNotifier.setSettings(ntfySettings);
+        // Koppel NTFY aan logger
+        logger.setNtfyNotifier(&ntfyNotifier);
+    }
+    
     // Initialiseer Logger module (handelt Google Sheets client af)
     uiController.showGSStatus("Google Sheets: authenticeren...", false); // Grijs
-    if (logger.begin(CLIENT_EMAIL, PROJECT_ID, PRIVATE_KEY, SPREADSHEET_ID, &systemClock)) {
+    if (logger.begin(clientEmail, projectId, privateKey, spreadsheetId, &systemClock)) {
     // Wacht op token authenticatie (max 30 seconden)
       // BELANGRIJK: Logger task roept sheetClient.ready() aan om token authenticatie te verwerken
     int auth_tries = 0;
@@ -2256,30 +2252,41 @@ void setup() {
     }
     
       if (logger.isTokenReady()) {
-      uiController.showGSStatus("Google Sheets: GEREED", false); // Grijs (succes)
+        uiController.showGSStatus("Google Sheets: GEREED", false); // Grijs (succes)
         g_googleAuthTokenReady = true; // Update globale variabele voor backward compatibility
-      delay(1000); // Korte pauze
-    } else {
+        delay(1000); // Korte pauze
+      } else {
         uiController.showGSStatus("Google Sheets: MISLUKT", true); // Rood (fout)
-      delay(1000);
-    }
-  } else {
+        delay(1000);
+      }
+    } else {
       uiController.showGSStatus("Google Sheets: MISLUKT", true); // Rood (fout)
       delay(1000);
     }
-  } else {
-    uiController.showGSStatus("Google Sheets: WiFi nodig", false); // Grijs
-    delay(1000);
-  }
-  
-  // Verberg initialisatie status (status regels blijven zichtbaar)
-  uiController.hideInitStatus();
-  
-  // Zet alle knoppen terug naar normale kleuren (initialisatie compleet)
-  uiController.setButtonsNormal();
-  
-  // Initialiseer webserver (alleen als WiFi verbonden is)
-  if (WiFi.status() == WL_CONNECTED) {
+    
+    // STAP 2: Start nu AP voor web interface (alleen als WiFi Station verbonden is)
+    // Zet WiFi in AP+STA mode (zodat we tegelijk verbonden kunnen zijn met extern netwerk EN een eigen AP hebben)
+    WiFi.mode(WIFI_AP_STA);
+    
+    // Start Access Point voor web interface
+    const char* apSSID = "ESP32-TC";
+    const char* apPassword = ""; // Geen wachtwoord voor eenvoudige toegang
+    IPAddress apIP(192, 168, 4, 1);
+    IPAddress apGateway(192, 168, 4, 1);
+    IPAddress apSubnet(255, 255, 255, 0);
+    
+    WiFi.softAPConfig(apIP, apGateway, apSubnet);
+    WiFi.softAP(apSSID, apPassword);
+    
+    // Update WiFi status met SSID en Station IP
+    snprintf(wifiInfo, sizeof(wifiInfo), "WiFi: %s (%s)", 
+             WiFi.SSID().c_str(), WiFi.localIP().toString().c_str());
+    uiController.showWifiStatus(wifiInfo, false); // Grijs
+    
+    // Update AP status
+    uiController.showAPStatus("ESP32-TC", WiFi.softAPIP().toString().c_str());
+    
+    // Start webserver voor web interface
     webServer.setSettingsStore(&settingsStore);
     webServer.setCycleController(&cycleController);
     webServer.setTempSensor(&tempSensor);
@@ -2297,12 +2304,14 @@ void setup() {
     });
     
     // Settings change callback
-    webServer.setSettingsChangeCallback([](float tTop, float tBottom, float tempOffset, int cycleMax) {
+    webServer.setSettingsChangeCallback([](float tTop, float tBottom, float tempOffset, int cycleMax,
+                                            const char* clientEmail, const char* projectId,
+                                            const char* privateKey, const char* spreadsheetId) {
       T_top = tTop;
       T_bottom = tBottom;
       temp_offset = tempOffset;
       cyclus_max = cycleMax;
-      
+
       // Valideer en corrigeer indien nodig
       if (T_top >= TEMP_MAX) T_top = TEMP_MAX;
       if (T_top < T_bottom + TEMP_MIN_DIFF) T_top = T_bottom + TEMP_MIN_DIFF;
@@ -2311,7 +2320,7 @@ void setup() {
       if (temp_offset < -10.0) temp_offset = -10.0;
       if (temp_offset > 10.0) temp_offset = 10.0;
       if (cyclus_max < 0) cyclus_max = 0;
-      
+
       // Sla instellingen op
       Settings settings;
       settings.tTop = T_top;
@@ -2320,15 +2329,42 @@ void setup() {
       settings.cycleMax = cyclus_max;
       settingsStore.save(settings);
       
+      // Sla Google credentials apart op (om RAM te besparen)
+      if (clientEmail && strlen(clientEmail) > 0) {
+        GoogleCredentials creds;
+        strncpy(creds.clientEmail, clientEmail, sizeof(creds.clientEmail) - 1);
+        creds.clientEmail[sizeof(creds.clientEmail) - 1] = '\0';
+        
+        if (projectId && strlen(projectId) > 0) {
+          strncpy(creds.projectId, projectId, sizeof(creds.projectId) - 1);
+          creds.projectId[sizeof(creds.projectId) - 1] = '\0';
+        }
+        if (privateKey && strlen(privateKey) > 0) {
+          strncpy(creds.privateKey, privateKey, sizeof(creds.privateKey) - 1);
+          creds.privateKey[sizeof(creds.privateKey) - 1] = '\0';
+        }
+        if (spreadsheetId && strlen(spreadsheetId) > 0) {
+          strncpy(creds.spreadsheetId, spreadsheetId, sizeof(creds.spreadsheetId) - 1);
+          creds.spreadsheetId[sizeof(creds.spreadsheetId) - 1] = '\0';
+        }
+        settingsStore.saveGoogleCredentials(creds);
+        
+        // Herinitialiseer Logger als Google credentials zijn gewijzigd
+        if (WiFi.status() == WL_CONNECTED) {
+          uiController.showGSStatus("Google Sheets: herinitialiseren...", false);
+          logger.begin(clientEmail, projectId, privateKey, spreadsheetId, &systemClock);
+        }
+      }
+
       // Pas instellingen toe
       tempSensor.setOffset(temp_offset);
       cycleController.setTargetTop(T_top);
       cycleController.setTargetBottom(T_bottom);
       cycleController.setMaxCycles(cyclus_max);
-      
+
       // Log wijziging
       char log_msg[64];
-      snprintf(log_msg, sizeof(log_msg), "Web: Top=%.1f, Dal=%.1f, Offset=%.1f, Max=%d", 
+      snprintf(log_msg, sizeof(log_msg), "Web: Top=%.1f, Dal=%.1f, Offset=%.1f, Max=%d",
                T_top, T_bottom, temp_offset, cyclus_max);
       logToGoogleSheet(log_msg);
     });
@@ -2344,18 +2380,65 @@ void setup() {
     webServer.setGetCycleMaxCallback([]() { return cyclus_max; });
     webServer.setGetTempOffsetCallback([]() { return temp_offset; });
     
+    // Google credentials getters (laad uit Preferences)
+    webServer.setGetClientEmailCallback([]() -> const char* {
+      static GoogleCredentials creds;
+      creds = settingsStore.loadGoogleCredentials();
+      return (const char*)creds.clientEmail;
+    });
+    webServer.setGetProjectIdCallback([]() -> const char* {
+      static GoogleCredentials creds;
+      creds = settingsStore.loadGoogleCredentials();
+      return (const char*)creds.projectId;
+    });
+    webServer.setGetPrivateKeyCallback([]() -> const char* {
+      static GoogleCredentials creds;
+      creds = settingsStore.loadGoogleCredentials();
+      return (const char*)creds.privateKey;
+    });
+    webServer.setGetSpreadsheetIdCallback([]() -> const char* {
+      static GoogleCredentials creds;
+      creds = settingsStore.loadGoogleCredentials();
+      return (const char*)creds.spreadsheetId;
+    });
+    
+    // NTFY callbacks
+    webServer.setGetNtfyTopicCallback([]() -> const char* {
+      return ntfyNotifier.getTopic();
+    });
+    webServer.setGetNtfySettingsCallback([]() -> NtfyNotificationSettings {
+      return ntfyNotifier.getSettings();
+    });
+    webServer.setSaveNtfySettingsCallback([](const char* topic, const NtfyNotificationSettings& settings) {
+      if (topic != nullptr && strlen(topic) > 0) {
+        ntfyNotifier.setTopic(topic);
+      }
+      ntfyNotifier.setSettings(settings);
+      settingsStore.saveNtfySettings(topic, settings);
+    });
+    
     // Start webserver
     webServer.begin();
     
     // Toon webserver IP in serial monitor
-    Serial.print("Webserver gestart op: http://");
+    Serial.print("Webserver gestart op AP: http://");
+    Serial.println(WiFi.softAPIP());
+    Serial.print("WiFi Station verbonden: ");
     Serial.println(WiFi.localIP());
+  } else {
+    // Geen Station verbinding - Google Sheets logging werkt niet
+    uiController.showGSStatus("Google Sheets: WiFi Station nodig", false); // Grijs
+    delay(1000);
   }
   
+  // Verberg initialisatie status (status regels blijven zichtbaar)
+  uiController.hideInitStatus();
+  
+  // Zet alle knoppen terug naar normale kleuren (initialisatie compleet)
+  uiController.setButtonsNormal();
+  
   // Logger module is al geïnitialiseerd in WiFi sectie hierboven
-  // Update globale variabelen voor backward compatibility
-  logQueue = nullptr; // Logger module handelt queue af
-  loggingTaskHandle = nullptr; // Logger module handelt task af
+  // (Geen globale variabelen meer nodig - Logger module handelt alles intern af)
 }
 
 void loop() {
@@ -2363,10 +2446,8 @@ void loop() {
   // Dit is de eerste regel om watchdog altijd te voeden
   yield();
   
-  // Handle webserver requests (alleen als WiFi verbonden is)
-  if (WiFi.status() == WL_CONNECTED) {
-    webServer.handleClient();
-  }
+  // Handle webserver requests (AP is alleen actief als WiFi Station verbonden is)
+  webServer.handleClient();
   
   // BELANGRIJK: LVGL task handler - roep dit VAKER aan voor betere responsiviteit
   // Meerdere calls voor snellere touch response (vooral belangrijk voor terug-knop)
@@ -2379,23 +2460,15 @@ void loop() {
   
   // Behandel logging success feedback (vanuit Core 1 via Logger module)
   if (logger.hasLogSuccess()) {
-    uiController.showGSSuccessCheckmark();  // Toon groen vinkje
+    uiController.showGSSuccessCheckmark();  // Toon groen "LOGGING" tekst
     logger.clearLogSuccess();  // Reset flag
     // Update globale variabelen voor backward compatibility
     g_logSuccessFlag = false;
     g_logSuccessTime = logger.getLogSuccessTime(); // Update tijdstempel
   }
   
-  // Verwijder vinkje na 1 seconde (gebruik globale variabele voor backward compatibility)
-  // TODO: Dit kan later worden verplaatst naar Logger module
-  if (g_logSuccessTime > 0 && (millis() - g_logSuccessTime >= 1000)) {
-    if (gs_status_label != nullptr && strlen(g_lastGSStatusText) > 0) {
-      // Reset naar originele tekst (zonder vinkje)
-      lv_label_set_text(gs_status_label, g_lastGSStatusText);
-      lv_obj_set_style_text_color(gs_status_label, lv_color_hex(0x888888), LV_PART_MAIN); // Terug naar grijs
-    }
-    g_logSuccessTime = 0;  // Reset timer
-  }
+  // Reset LOGGING status na 1 seconde (via UIController)
+  uiController.updateGSStatusReset();
   
   // Temperatuur meting (elke 0.3 seconde)
   // VERPLAATST NAAR TempSensor module

@@ -1,5 +1,6 @@
 #include "Logger.h"
 #include "../SystemClock/SystemClock.h"
+#include "../NtfyNotifier/NtfyNotifier.h"
 #include <Arduino.h>
 // FirebaseJson wordt automatisch geïncludeerd via ESP_Google_Sheet_Client.h
 
@@ -8,7 +9,7 @@ Logger* Logger::instance = nullptr;
 
 Logger::Logger() : queue(nullptr), taskHandle(nullptr), tokenReady(false), 
                    logSuccessFlag(false), logSuccessTime(0), systemClock(nullptr),
-                   spreadsheetId(nullptr) {
+                   spreadsheetId(nullptr), ntfyNotifier(nullptr) {
     lastStatusText[0] = '\0';
     instance = this; // Set instance voor static callbacks
 }
@@ -231,6 +232,9 @@ void Logger::logInternal(const LogRequest* req) {
     } else {
         vTaskDelay(pdMS_TO_TICKS(500)); // Extra delay na fout
     }
+    
+    // Verstuur NTFY notificatie (onafhankelijk van Google Sheets succes)
+    sendNtfyNotification(req);
 }
 
 unsigned long Logger::getLogSuccessTime() const {
@@ -243,4 +247,71 @@ void Logger::tokenStatusCallback(TokenInfo info) {
             instance->tokenReady = true;
         }
     }
+}
+
+void Logger::sendNtfyNotification(const LogRequest* req) {
+    if (req == nullptr || ntfyNotifier == nullptr || !ntfyNotifier->isEnabled()) {
+        return;
+    }
+    
+    // Bepaal notificatie type op basis van status
+    NtfyNotificationType type = NtfyNotificationType::LOG_INFO;
+    
+    if (strcmp(req->status, "START") == 0) {
+        type = NtfyNotificationType::LOG_START;
+    } else if (strcmp(req->status, "STOP") == 0 || strcmp(req->status, "Uit") == 0) {
+        type = NtfyNotificationType::LOG_STOP;
+    } else if (strcmp(req->status, "Veiligheidskoeling") == 0 || strstr(req->status, "Beveiliging") != nullptr) {
+        // Veiligheidskoeling of beveiligingsmeldingen (bijv. "Beveiliging: Opwarmen te lang", "Beveiliging: Temperatuur stagnatie")
+        type = NtfyNotificationType::LOG_SAFETY;
+    } else if (strstr(req->status, "tot") != nullptr) {
+        // "Opwarmen tot Afkoelen" of "Afkoelen tot Opwarmen"
+        type = NtfyNotificationType::LOG_TRANSITION;
+    }
+    
+    // Maak title
+    char title[64];
+    snprintf(title, sizeof(title), "Temperatuur Monitor");
+    
+    // Maak message met relevante informatie
+    char message[512];
+    char totaal_cycli[16];
+    if (req->cyclus_max == 0) {
+        strncpy(totaal_cycli, "inf", sizeof(totaal_cycli) - 1);
+        totaal_cycli[sizeof(totaal_cycli) - 1] = '\0';
+    } else {
+        snprintf(totaal_cycli, sizeof(totaal_cycli), "%d", req->cyclus_max);
+    }
+    
+    // Maak timestamp string
+    char timestamp[20];
+    if (req->timestamp_ms > 0 && systemClock != nullptr) {
+        systemClock->getTimestampFromMillis(req->timestamp_ms, timestamp, sizeof(timestamp));
+    } else if (systemClock != nullptr) {
+        systemClock->getTimestamp(timestamp, sizeof(timestamp));
+    } else {
+        strncpy(timestamp, "00-00-00 00:00:00", sizeof(timestamp) - 1);
+        timestamp[sizeof(timestamp) - 1] = '\0';
+    }
+    
+    // Format message
+    snprintf(message, sizeof(message), 
+        "Status: %s\n"
+        "Temperatuur: %.1f°C\n"
+        "Cyclus: %d/%s\n"
+        "T_top: %.1f°C, T_bottom: %.1f°C\n"
+        "Fase tijd: %s\n"
+        "Tijd: %s",
+        req->status,
+        req->temp,
+        req->cyclus_teller,
+        totaal_cycli,
+        req->T_top,
+        req->T_bottom,
+        req->fase_tijd,
+        timestamp
+    );
+    
+    // Verstuur notificatie
+    ntfyNotifier->send(title, message, type);
 }

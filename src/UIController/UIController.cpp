@@ -17,8 +17,9 @@ UIController::UIController()
       text_label_cyclus_max(nullptr), text_label_version(nullptr), btn_start(nullptr),
       btn_stop(nullptr), btn_graph(nullptr), btn_t_top_plus(nullptr), btn_t_top_minus(nullptr),
       btn_t_bottom_plus(nullptr), btn_t_bottom_minus(nullptr), btn_temp_plus(nullptr),
-      btn_temp_minus(nullptr), btn_cyclus_plus(nullptr), btn_cyclus_minus(nullptr),
+      btn_temp_minus(nullptr),       btn_cyclus_plus(nullptr), btn_cyclus_minus(nullptr),
       init_status_label(nullptr), wifi_status_label(nullptr), gs_status_label(nullptr),
+      ap_status_label_prefix(nullptr), ap_status_label_ssid(nullptr), ap_status_label_ip_label(nullptr), ap_status_label_ip(nullptr),
       screen_graph(nullptr), chart(nullptr), chart_series_rising(nullptr), chart_series_falling(nullptr),
       graph_temps(nullptr), graph_times(nullptr), graph_write_index(0), graph_count(0),
       graph_data_ready(false), graph_last_log_time(0), last_graph_update_ms(0),
@@ -31,6 +32,7 @@ UIController::UIController()
     }
     // Initialiseer last_gs_status_text
     last_gs_status_text[0] = '\0';
+    gs_logging_start_time = 0;  // Geen actieve LOGGING status
 }
 
 bool UIController::begin(int firmwareVersionMajor, int firmwareVersionMinor) {
@@ -374,17 +376,62 @@ void UIController::showWifiStatus(const char* message, bool isError) {
 void UIController::showGSStatus(const char* message, bool isError) {
     if (gs_status_label == nullptr) return;
     
-    // Bewaar laatste status tekst voor gebruik in showGSSuccessCheckmark
-    strncpy(last_gs_status_text, message, sizeof(last_gs_status_text) - 1);
+    // Converteer "Google Sheets: xxx" naar "Google: xxx" voor kortere weergave
+    char display_text[128];
+    if (strncmp(message, "Google Sheets: ", 15) == 0) {
+        snprintf(display_text, sizeof(display_text), "Google: %s", message + 15);
+    } else {
+        strncpy(display_text, message, sizeof(display_text) - 1);
+        display_text[sizeof(display_text) - 1] = '\0';
+    }
+    
+    // Bewaar originele tekst (zonder "Google: " prefix) voor gebruik in showGSSuccessCheckmark
+    strncpy(last_gs_status_text, display_text, sizeof(last_gs_status_text) - 1);
     last_gs_status_text[sizeof(last_gs_status_text) - 1] = '\0';
     
-    lv_label_set_text(gs_status_label, message);
+    lv_label_set_text(gs_status_label, display_text);
     if (isError) {
         lv_obj_set_style_text_color(gs_status_label, lv_color_hex(0xCC0000), LV_PART_MAIN); // Rood voor fout
     } else {
         lv_obj_set_style_text_color(gs_status_label, lv_color_hex(0x888888), LV_PART_MAIN); // Grijs voor succes
     }
     lv_obj_clear_flag(gs_status_label, LV_OBJ_FLAG_HIDDEN); // Zorg dat label zichtbaar is
+}
+
+void UIController::showAPStatus(const char* apName, const char* apIP) {
+    if (ap_status_label_prefix == nullptr || ap_status_label_ssid == nullptr || 
+        ap_status_label_ip_label == nullptr || ap_status_label_ip == nullptr) return;
+    
+    // Update SSID label (groen)
+    if (apName && strlen(apName) > 0) {
+        lv_label_set_text(ap_status_label_ssid, apName);
+        lv_obj_clear_flag(ap_status_label_ssid, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        lv_label_set_text(ap_status_label_ssid, "");
+        lv_obj_add_flag(ap_status_label_ssid, LV_OBJ_FLAG_HIDDEN);
+    }
+    
+    // Update IP label (groen) - rechts uitgelijnd
+    if (apIP && strlen(apIP) > 0) {
+        lv_label_set_text(ap_status_label_ip, apIP);
+        lv_obj_clear_flag(ap_status_label_ip, LV_OBJ_FLAG_HIDDEN);
+        
+        // Positioneer IP adres helemaal rechts (op y=-65, zelfde regel als AP status)
+        lv_obj_align(ap_status_label_ip, LV_ALIGN_BOTTOM_RIGHT, -10, -65);
+        
+        // Positioneer "IP:" label links van IP adres
+        // Verplaats "IP:" naar links van IP adres door eerst IP te positioneren, dan IP: te positioneren
+        lv_obj_align_to(ap_status_label_ip_label, ap_status_label_ip, LV_ALIGN_OUT_LEFT_MID, -2, 0); // 2px spatie tussen "IP:" en IP
+        
+        lv_obj_clear_flag(ap_status_label_ip_label, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        lv_label_set_text(ap_status_label_ip, "");
+        lv_obj_add_flag(ap_status_label_ip, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(ap_status_label_ip_label, LV_OBJ_FLAG_HIDDEN);
+    }
+    
+    // Prefix label blijft altijd zichtbaar (grijs)
+    lv_obj_clear_flag(ap_status_label_prefix, LV_OBJ_FLAG_HIDDEN);
 }
 
 void UIController::showGSSuccessCheckmark() {
@@ -395,7 +442,7 @@ void UIController::showGSSuccessCheckmark() {
     strncpy(text_with_logging, last_gs_status_text, sizeof(text_with_logging) - 1);
     text_with_logging[sizeof(text_with_logging) - 1] = '\0';
     
-    // Vervang "GEREED" door "LOGGING"
+    // Vervang "GEREED" door "LOGGING" (kan nu "Google: GEREED" zijn)
     char* gereed_pos = strstr(text_with_logging, "GEREED");
     if (gereed_pos != nullptr) {
         size_t gereed_pos_offset = gereed_pos - text_with_logging;
@@ -406,6 +453,21 @@ void UIController::showGSSuccessCheckmark() {
     }
     lv_label_set_text(gs_status_label, text_with_logging);
     lv_obj_set_style_text_color(gs_status_label, lv_color_hex(0x00AA00), LV_PART_MAIN); // Groen voor LOGGING tekst
+    
+    // Sla tijdstempel op voor reset na 1 seconde
+    gs_logging_start_time = millis();
+}
+
+void UIController::updateGSStatusReset() {
+    // Reset LOGGING status na 1 seconde
+    if (gs_logging_start_time > 0 && (millis() - gs_logging_start_time >= 1000)) {
+        if (gs_status_label != nullptr && strlen(last_gs_status_text) > 0) {
+            // Reset naar originele tekst (zonder LOGGING)
+            lv_label_set_text(gs_status_label, last_gs_status_text);
+            lv_obj_set_style_text_color(gs_status_label, lv_color_hex(0x888888), LV_PART_MAIN); // Terug naar grijs
+        }
+        gs_logging_start_time = 0;  // Reset timer
+    }
 }
 
 void UIController::setButtonsGray() {
@@ -524,6 +586,16 @@ void UIController::createMainScreen() {
     lv_obj_set_width(text_label_status, 230);
     lv_label_set_long_mode(text_label_status, LV_LABEL_LONG_CLIP);
     
+    // Google Sheets status label (rechts boven, direct onder Status, 10px naar beneden)
+    gs_status_label = lv_label_create(lv_screen_active());
+    lv_label_set_text(gs_status_label, "");
+    lv_obj_set_style_text_align(gs_status_label, LV_TEXT_ALIGN_RIGHT, 0);
+    lv_obj_align(gs_status_label, LV_ALIGN_TOP_RIGHT, -5, 34);
+    lv_obj_set_width(gs_status_label, 230);
+    lv_obj_set_style_text_color(gs_status_label, lv_color_hex(0x888888), LV_PART_MAIN);
+    lv_obj_set_style_text_font(gs_status_label, &lv_font_montserrat_14, LV_PART_MAIN);
+    lv_label_set_long_mode(gs_status_label, LV_LABEL_LONG_CLIP);
+    
     // Regel 2: Grote temperatuur waarde
     text_label_temp_value = lv_label_create(lv_screen_active());
     lv_label_set_text(text_label_temp_value, "--.--°C");
@@ -630,19 +702,41 @@ void UIController::createMainScreen() {
     lv_obj_set_style_text_color(init_status_label, lv_color_hex(0x000000), LV_PART_MAIN);
     lv_obj_set_style_text_font(init_status_label, &lv_font_montserrat_14, LV_PART_MAIN);
     
+    // AP status labels (linksonder, bovenste regel) - opgesplitst voor kleurcodering
+    ap_status_label_prefix = lv_label_create(lv_screen_active());
+    lv_label_set_text(ap_status_label_prefix, "Instellen AP: ");
+    lv_obj_set_style_text_align(ap_status_label_prefix, LV_TEXT_ALIGN_LEFT, 0);
+    lv_obj_align(ap_status_label_prefix, LV_ALIGN_BOTTOM_LEFT, 10, -65);
+    lv_obj_set_style_text_color(ap_status_label_prefix, lv_color_hex(0x888888), LV_PART_MAIN); // Grijs
+    lv_obj_set_style_text_font(ap_status_label_prefix, &lv_font_montserrat_14, LV_PART_MAIN);
+    
+    ap_status_label_ssid = lv_label_create(lv_screen_active());
+    lv_label_set_text(ap_status_label_ssid, "");
+    lv_obj_set_style_text_align(ap_status_label_ssid, LV_TEXT_ALIGN_LEFT, 0);
+    lv_obj_align(ap_status_label_ssid, LV_ALIGN_BOTTOM_LEFT, 116, -65); // Na "Instellen AP: " (ongeveer 106px breed met spatie)
+    lv_obj_set_style_text_color(ap_status_label_ssid, lv_color_hex(0x00AA00), LV_PART_MAIN); // Groen
+    lv_obj_set_style_text_font(ap_status_label_ssid, &lv_font_montserrat_14, LV_PART_MAIN);
+    
+    ap_status_label_ip_label = lv_label_create(lv_screen_active());
+    lv_label_set_text(ap_status_label_ip_label, "IP:");
+    lv_obj_set_style_text_align(ap_status_label_ip_label, LV_TEXT_ALIGN_RIGHT, 0);
+    lv_obj_align(ap_status_label_ip_label, LV_ALIGN_BOTTOM_RIGHT, -10, -65); // Rechts uitgelijnd
+    lv_obj_set_style_text_color(ap_status_label_ip_label, lv_color_hex(0x888888), LV_PART_MAIN); // Grijs
+    lv_obj_set_style_text_font(ap_status_label_ip_label, &lv_font_montserrat_14, LV_PART_MAIN);
+    
+    ap_status_label_ip = lv_label_create(lv_screen_active());
+    lv_label_set_text(ap_status_label_ip, "");
+    lv_obj_set_style_text_align(ap_status_label_ip, LV_TEXT_ALIGN_RIGHT, 0);
+    lv_obj_align(ap_status_label_ip, LV_ALIGN_BOTTOM_RIGHT, -10, -65); // Rechts uitgelijnd, wordt dynamisch gepositioneerd
+    lv_obj_set_style_text_color(ap_status_label_ip, lv_color_hex(0x00AA00), LV_PART_MAIN); // Groen
+    lv_obj_set_style_text_font(ap_status_label_ip, &lv_font_montserrat_14, LV_PART_MAIN);
+    
     wifi_status_label = lv_label_create(lv_screen_active());
     lv_label_set_text(wifi_status_label, "");
     lv_obj_set_style_text_align(wifi_status_label, LV_TEXT_ALIGN_LEFT, 0);
-    lv_obj_align(wifi_status_label, LV_ALIGN_BOTTOM_LEFT, 10, -65);
+    lv_obj_align(wifi_status_label, LV_ALIGN_BOTTOM_LEFT, 10, -50);
     lv_obj_set_style_text_color(wifi_status_label, lv_color_hex(0x888888), LV_PART_MAIN);
     lv_obj_set_style_text_font(wifi_status_label, &lv_font_montserrat_14, LV_PART_MAIN);
-    
-    gs_status_label = lv_label_create(lv_screen_active());
-    lv_label_set_text(gs_status_label, "");
-    lv_obj_set_style_text_align(gs_status_label, LV_TEXT_ALIGN_LEFT, 0);
-    lv_obj_align(gs_status_label, LV_ALIGN_BOTTOM_LEFT, 10, -50);
-    lv_obj_set_style_text_color(gs_status_label, lv_color_hex(0x888888), LV_PART_MAIN);
-    lv_obj_set_style_text_font(gs_status_label, &lv_font_montserrat_14, LV_PART_MAIN);
     
     // Knoppen
     btn_start = lv_btn_create(lv_scr_act());
@@ -672,7 +766,7 @@ void UIController::createMainScreen() {
     lv_obj_center(btn_stop_label);
     lv_obj_add_event_cb(btn_stop, stop_button_event, LV_EVENT_ALL, NULL);
     
-    // Versienummer label
+    // Versienummer label (op dezelfde hoogte als WiFi status)
     text_label_version = lv_label_create(lv_scr_act());
     char version_str[16];
     snprintf(version_str, sizeof(version_str), "v%d.%02d", firmwareVersionMajor, firmwareVersionMinor);
@@ -680,7 +774,7 @@ void UIController::createMainScreen() {
     lv_obj_set_style_text_color(text_label_version, lv_color_hex(0x888888), LV_PART_MAIN);
     lv_obj_set_style_text_opa(text_label_version, LV_OPA_70, LV_PART_MAIN);
     lv_obj_set_style_text_font(text_label_version, &lv_font_montserrat_14, LV_PART_MAIN);
-    lv_obj_align(text_label_version, LV_ALIGN_BOTTOM_RIGHT, -10, -55);
+    lv_obj_align(text_label_version, LV_ALIGN_BOTTOM_RIGHT, -10, -50);
     
     // Maak grafiek scherm
     createGraphScreen();

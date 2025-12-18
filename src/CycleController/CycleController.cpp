@@ -73,6 +73,8 @@ void CycleController::update() {
         if (isnan(currentTemp)) {
             return;
         }
+        // Systeem is uit of cyclus niet actief - stop hier, start geen nieuwe cyclus
+        return;
     }
     
     // Extra veiligheidscheck
@@ -494,4 +496,5 @@ void CycleController::stopAll() {
     digitalWrite(relais_verwarming_pin, LOW);
     systeem_uit = true;
     cyclus_actief = false;
+    verwarmen_actief = false; // Reset verwarmen_actief om te voorkomen dat cyclus weer start
 }

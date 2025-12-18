@@ -15,7 +15,10 @@ ConfigWebServer::ConfigWebServer(int port)
       isActiveCallback(nullptr), isHeatingCallback(nullptr),
       getCycleCountCallback(nullptr), getTtopCallback(nullptr),
       getTbottomCallback(nullptr), getCycleMaxCallback(nullptr),
-      getTempOffsetCallback(nullptr) {
+      getTempOffsetCallback(nullptr), getClientEmailCallback(nullptr),
+      getProjectIdCallback(nullptr), getPrivateKeyCallback(nullptr),
+      getSpreadsheetIdCallback(nullptr), getNtfyTopicCallback(nullptr),
+      getNtfySettingsCallback(nullptr), saveNtfySettingsCallback(nullptr) {
 }
 
 void ConfigWebServer::begin() {
@@ -61,6 +64,66 @@ void ConfigWebServer::handleSettings() {
     } else {
         response += ",\"cycleMax\":0";
     }
+    // Google Sheets credentials
+    if (getClientEmailCallback) {
+        const char* email = getClientEmailCallback();
+        response += ",\"clientEmail\":\"" + String(email) + "\"";
+    } else {
+        response += ",\"clientEmail\":\"\"";
+    }
+    if (getProjectIdCallback) {
+        const char* projectId = getProjectIdCallback();
+        response += ",\"projectId\":\"" + String(projectId) + "\"";
+    } else {
+        response += ",\"projectId\":\"\"";
+    }
+    if (getPrivateKeyCallback) {
+        const char* key = getPrivateKeyCallback();
+        // Escape quotes en newlines in JSON
+        String escapedKey = String(key);
+        escapedKey.replace("\"", "\\\"");
+        escapedKey.replace("\n", "\\n");
+        escapedKey.replace("\r", "\\r");
+        response += ",\"privateKey\":\"" + escapedKey + "\"";
+    } else {
+        response += ",\"privateKey\":\"\"";
+    }
+    if (getSpreadsheetIdCallback) {
+        const char* sheetId = getSpreadsheetIdCallback();
+        response += ",\"spreadsheetId\":\"" + String(sheetId) + "\"";
+    } else {
+        response += ",\"spreadsheetId\":\"\"";
+    }
+    
+    // NTFY instellingen
+    if (getNtfyTopicCallback) {
+        const char* topic = getNtfyTopicCallback();
+        response += ",\"ntfyTopic\":\"" + String(topic ? topic : "") + "\"";
+    } else {
+        response += ",\"ntfyTopic\":\"\"";
+    }
+    
+    if (getNtfySettingsCallback) {
+        NtfyNotificationSettings settings = getNtfySettingsCallback();
+        response += ",\"ntfyEnabled\":" + String(settings.enabled ? "true" : "false");
+        response += ",\"ntfyLogInfo\":" + String(settings.logInfo ? "true" : "false");
+        response += ",\"ntfyLogStart\":" + String(settings.logStart ? "true" : "false");
+        response += ",\"ntfyLogStop\":" + String(settings.logStop ? "true" : "false");
+        response += ",\"ntfyLogTransition\":" + String(settings.logTransition ? "true" : "false");
+        response += ",\"ntfyLogSafety\":" + String(settings.logSafety ? "true" : "false");
+        response += ",\"ntfyLogError\":" + String(settings.logError ? "true" : "false");
+        response += ",\"ntfyLogWarning\":" + String(settings.logWarning ? "true" : "false");
+    } else {
+        response += ",\"ntfyEnabled\":true";
+        response += ",\"ntfyLogInfo\":true";
+        response += ",\"ntfyLogStart\":true";
+        response += ",\"ntfyLogStop\":true";
+        response += ",\"ntfyLogTransition\":true";
+        response += ",\"ntfyLogSafety\":true";
+        response += ",\"ntfyLogError\":true";
+        response += ",\"ntfyLogWarning\":true";
+    }
+    
     response += "}";
     server.send(200, "application/json", response);
 }
@@ -157,6 +220,74 @@ void ConfigWebServer::handleSaveSettings() {
         }
     }
     
+    // Parse Google Sheets credentials
+    char clientEmail[128] = "";
+    char projectId[64] = "";
+    char privateKey[2048] = "";
+    char spreadsheetId[128] = "";
+    
+    // Helper functie om string waarde uit JSON te halen
+    auto parseJsonString = [&body](const char* key, char* buffer, size_t bufferSize) {
+        int keyIdx = body.indexOf(key);
+        if (keyIdx >= 0) {
+            int colonIdx = body.indexOf(':', keyIdx);
+            int quoteStart = body.indexOf('"', colonIdx);
+            if (quoteStart >= 0) {
+                int quoteEnd = body.indexOf('"', quoteStart + 1);
+                if (quoteEnd > quoteStart) {
+                    String value = body.substring(quoteStart + 1, quoteEnd);
+                    // Unescape JSON escapes
+                    value.replace("\\\"", "\"");
+                    value.replace("\\n", "\n");
+                    value.replace("\\r", "\r");
+                    value.replace("\\\\", "\\");
+                    size_t len = value.length();
+                    if (len >= bufferSize) len = bufferSize - 1;
+                    strncpy(buffer, value.c_str(), len);
+                    buffer[len] = '\0';
+                }
+            }
+        }
+    };
+    
+    parseJsonString("\"clientEmail\"", clientEmail, sizeof(clientEmail));
+    parseJsonString("\"projectId\"", projectId, sizeof(projectId));
+    parseJsonString("\"privateKey\"", privateKey, sizeof(privateKey));
+    parseJsonString("\"spreadsheetId\"", spreadsheetId, sizeof(spreadsheetId));
+    
+    // Parse NTFY instellingen
+    char ntfyTopic[64] = "";
+    NtfyNotificationSettings ntfySettings;
+    
+    parseJsonString("\"ntfyTopic\"", ntfyTopic, sizeof(ntfyTopic));
+    
+    // Parse boolean waarden voor NTFY instellingen
+    auto parseJsonBool = [&body](const char* key, bool defaultValue) -> bool {
+        int keyIdx = body.indexOf(key);
+        if (keyIdx >= 0) {
+            int colonIdx = body.indexOf(':', keyIdx);
+            if (colonIdx >= 0) {
+                int trueIdx = body.indexOf("true", colonIdx);
+                int falseIdx = body.indexOf("false", colonIdx);
+                if (trueIdx >= 0 && (falseIdx < 0 || trueIdx < falseIdx)) {
+                    return true;
+                } else if (falseIdx >= 0) {
+                    return false;
+                }
+            }
+        }
+        return defaultValue;
+    };
+    
+    ntfySettings.enabled = parseJsonBool("\"ntfyEnabled\"", true);
+    ntfySettings.logInfo = parseJsonBool("\"ntfyLogInfo\"", true);
+    ntfySettings.logStart = parseJsonBool("\"ntfyLogStart\"", true);
+    ntfySettings.logStop = parseJsonBool("\"ntfyLogStop\"", true);
+    ntfySettings.logTransition = parseJsonBool("\"ntfyLogTransition\"", true);
+    ntfySettings.logSafety = parseJsonBool("\"ntfyLogSafety\"", true);
+    ntfySettings.logError = parseJsonBool("\"ntfyLogError\"", true);
+    ntfySettings.logWarning = parseJsonBool("\"ntfyLogWarning\"", true);
+    
     // Validatie
     if (tTop < tBottom + 5.0) {
         server.send(400, "application/json", "{\"status\":\"error\",\"message\":\"T_top moet minstens 5°C hoger zijn dan T_bottom\"}");
@@ -171,7 +302,13 @@ void ConfigWebServer::handleSaveSettings() {
     
     // Call callback om instellingen op te slaan
     if (settingsChangeCallback) {
-        settingsChangeCallback(tTop, tBottom, tempOffset, cycleMax);
+        settingsChangeCallback(tTop, tBottom, tempOffset, cycleMax, 
+                               clientEmail, projectId, privateKey, spreadsheetId);
+    }
+    
+    // Sla NTFY instellingen op
+    if (saveNtfySettingsCallback) {
+        saveNtfySettingsCallback(ntfyTopic[0] != '\0' ? ntfyTopic : nullptr, ntfySettings);
     }
     
     server.send(200, "application/json", "{\"status\":\"ok\",\"message\":\"Instellingen opgeslagen\"}");
@@ -295,17 +432,41 @@ String ConfigWebServer::generateHTML() {
             color: #555;
             font-weight: 500;
         }
-        input[type="number"] {
+        input[type="number"], input[type="text"], textarea {
             width: 100%;
             padding: 12px;
             border: 2px solid #ddd;
             border-radius: 6px;
             font-size: 16px;
             transition: border-color 0.3s;
+            font-family: monospace;
         }
-        input[type="number"]:focus {
+        .input-with-button {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            width: 100%;
+        }
+        .input-with-button input[type="text"] {
+            flex: 1 1 0%;
+            min-width: 0;
+            width: auto !important;
+            max-width: none !important;
+        }
+        .input-with-button button {
+            flex: 0 0 auto !important;
+            padding: 12px 20px !important;
+            font-size: 14px !important;
+            white-space: nowrap !important;
+            min-width: auto !important;
+        }
+        input[type="number"]:focus, input[type="text"]:focus, textarea:focus {
             outline: none;
             border-color: #667eea;
+        }
+        textarea {
+            min-height: 100px;
+            resize: vertical;
         }
         .button-group {
             display: flex;
@@ -322,6 +483,10 @@ String ConfigWebServer::generateHTML() {
             cursor: pointer;
             transition: all 0.3s;
         }
+        /* Overschrijf button flex voor buttons in input-with-button container */
+        .input-with-button > button {
+            flex: 0 0 auto !important;
+        }
         .btn-primary {
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             color: white;
@@ -332,11 +497,23 @@ String ConfigWebServer::generateHTML() {
             color: white;
         }
         .btn-success:hover { background: #218838; }
+        .btn-success.disabled {
+            background: #808080;
+            color: white;
+            cursor: not-allowed;
+        }
+        .btn-success.disabled:hover { background: #808080; }
         .btn-danger {
             background: #dc3545;
             color: white;
         }
         .btn-danger:hover { background: #c82333; }
+        .btn-danger.disabled {
+            background: #808080;
+            color: white;
+            cursor: not-allowed;
+        }
+        .btn-danger.disabled:hover { background: #808080; }
         .status {
             padding: 15px;
             background: #e9ecef;
@@ -378,10 +555,18 @@ String ConfigWebServer::generateHTML() {
     <div class="container">
         <div class="header">
             <h1>🌡️ Temperatuur Cyclus Controller</h1>
-            <p>Versie 3.97</p>
+            <p>Versie 4.00</p>
         </div>
         <div class="content">
             <div id="message" class="message"></div>
+            
+            <div class="section">
+                <h2>🎮 Besturing</h2>
+                <div class="button-group">
+                    <button type="button" id="startBtn" class="btn-success">▶️ START</button>
+                    <button type="button" id="stopBtn" class="btn-danger">⏹️ STOP</button>
+                </div>
+            </div>
             
             <div class="section">
                 <h2>📊 Status</h2>
@@ -419,6 +604,7 @@ String ConfigWebServer::generateHTML() {
                     <div class="form-group">
                         <label for="tempOffset">Temperatuur Offset (°C):</label>
                         <input type="number" id="tempOffset" name="tempOffset" step="0.1" min="-10" max="10" required>
+                        <small style="color: #666; display: block; margin-top: 4px;">Kalibratie offset voor temperatuursensor. Wordt toegepast op alle metingen om systematische afwijkingen te corrigeren (bijv. +2.5°C als sensor 2.5°C te laag meet).</small>
                     </div>
                     <div class="form-group">
                         <label for="cycleMax">Maximaal Aantal Cycli (0 = oneindig):</label>
@@ -431,11 +617,83 @@ String ConfigWebServer::generateHTML() {
             </div>
             
             <div class="section">
-                <h2>🎮 Besturing</h2>
-                <div class="button-group">
-                    <button type="button" id="startBtn" class="btn-success">▶️ START</button>
-                    <button type="button" id="stopBtn" class="btn-danger">⏹️ STOP</button>
-                </div>
+                <h2>📊 Google Sheets Configuratie</h2>
+                <form id="googleForm">
+                    <div class="form-group">
+                        <label for="clientEmail">Client Email:</label>
+                        <input type="text" id="clientEmail" name="clientEmail" placeholder="example@project.iam.gserviceaccount.com" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="projectId">Project ID:</label>
+                        <input type="text" id="projectId" name="projectId" placeholder="project-id" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="privateKey">Private Key (volledige key inclusief BEGIN/END):</label>
+                        <textarea id="privateKey" name="privateKey" rows="8" placeholder="-----BEGIN PRIVATE KEY-----&#10;...&#10;-----END PRIVATE KEY-----" required></textarea>
+                    </div>
+                    <div class="form-group">
+                        <label for="spreadsheetId">Spreadsheet ID:</label>
+                        <input type="text" id="spreadsheetId" name="spreadsheetId" placeholder="1y3iIj6bsRgDEx1ZMGhXvuBZU5Nw1GjQsqsm4PQUTFy0" required>
+                    </div>
+                    <div class="button-group">
+                        <button type="submit" class="btn-primary">💾 Opslaan Google Credentials</button>
+                    </div>
+                </form>
+            </div>
+            
+            <div class="section">
+                <h2>🔔 NTFY Notificaties</h2>
+                <form id="ntfyForm">
+                    <div class="form-group">
+                        <label>
+                            <input type="checkbox" id="ntfyEnabled" name="ntfyEnabled" style="width: auto; margin-right: 8px;">
+                            NTFY Notificaties Inschakelen
+                        </label>
+                        <small style="color: #666; display: block; margin-top: 4px;">Wanneer ingeschakeld, worden alle logs ook als push notificaties verstuurd via NTFY.sh</small>
+                    </div>
+                    <div class="form-group">
+                        <label for="ntfyTopic">NTFY Topic:</label>
+                        <div class="input-with-button">
+                            <input type="text" id="ntfyTopic" name="ntfyTopic" maxlength="63" placeholder="mijn-temperatuur-monitor" required style="flex: 1; width: auto !important;">
+                            <button type="button" id="ntfyResetBtn" style="background: #2196F3; color: #fff; border: none; border-radius: 6px; cursor: pointer; font-weight: 500; padding: 12px 20px; font-size: 14px; white-space: nowrap; flex: 0 0 auto !important;">Standaard</button>
+                        </div>
+                        <small style="color: #666; display: block; margin-top: 4px;">Het NTFY topic waarop notificaties worden verstuurd. Abonneer je op dit topic in de NTFY app om notificaties te ontvangen.</small>
+                    </div>
+                    <div class="form-group">
+                        <h3 style="font-size: 16px; margin: 15px 0 10px 0; color: #555;">Melding Types:</h3>
+                        <label style="display: flex; align-items: center; margin-bottom: 8px;">
+                            <input type="checkbox" id="ntfyLogInfo" name="ntfyLogInfo" style="width: auto; margin-right: 8px;">
+                            Algemene Log Informatie
+                        </label>
+                        <label style="display: flex; align-items: center; margin-bottom: 8px;">
+                            <input type="checkbox" id="ntfyLogStart" name="ntfyLogStart" style="width: auto; margin-right: 8px;">
+                            Systeem Gestart
+                        </label>
+                        <label style="display: flex; align-items: center; margin-bottom: 8px;">
+                            <input type="checkbox" id="ntfyLogStop" name="ntfyLogStop" style="width: auto; margin-right: 8px;">
+                            Systeem Gestopt
+                        </label>
+                        <label style="display: flex; align-items: center; margin-bottom: 8px;">
+                            <input type="checkbox" id="ntfyLogTransition" name="ntfyLogTransition" style="width: auto; margin-right: 8px;">
+                            Fase Overgangen (Verwarmen/Koelen)
+                        </label>
+                        <label style="display: flex; align-items: center; margin-bottom: 8px;">
+                            <input type="checkbox" id="ntfyLogSafety" name="ntfyLogSafety" style="width: auto; margin-right: 8px;">
+                            Veiligheidsmeldingen
+                        </label>
+                        <label style="display: flex; align-items: center; margin-bottom: 8px;">
+                            <input type="checkbox" id="ntfyLogError" name="ntfyLogError" style="width: auto; margin-right: 8px;">
+                            Foutmeldingen
+                        </label>
+                        <label style="display: flex; align-items: center; margin-bottom: 8px;">
+                            <input type="checkbox" id="ntfyLogWarning" name="ntfyLogWarning" style="width: auto; margin-right: 8px;">
+                            Waarschuwingen
+                        </label>
+                    </div>
+                    <div class="button-group">
+                        <button type="submit" class="btn-primary">💾 Opslaan NTFY Instellingen</button>
+                    </div>
+                </form>
             </div>
         </div>
     </div>
@@ -469,6 +727,29 @@ String ConfigWebServer::generateHTML() {
                     
                     document.getElementById('cycleCount').textContent = 
                         data.cycleCount !== undefined ? data.cycleCount : '--';
+                    
+                    // Update knop kleuren op basis van isActive status
+                    const startBtn = document.getElementById('startBtn');
+                    const stopBtn = document.getElementById('stopBtn');
+                    const isActive = data.isActive === true;
+                    
+                    // START knop: groen wanneer niet actief (kan starten), grijs wanneer actief
+                    if (isActive) {
+                        startBtn.classList.add('disabled');
+                        startBtn.disabled = true;
+                    } else {
+                        startBtn.classList.remove('disabled');
+                        startBtn.disabled = false;
+                    }
+                    
+                    // STOP knop: rood wanneer actief (kan stoppen), grijs wanneer niet actief
+                    if (isActive) {
+                        stopBtn.classList.remove('disabled');
+                        stopBtn.disabled = false;
+                    } else {
+                        stopBtn.classList.add('disabled');
+                        stopBtn.disabled = true;
+                    }
                 })
                 .catch(e => console.error('Status update error:', e));
         }
@@ -481,6 +762,21 @@ String ConfigWebServer::generateHTML() {
                     if (data.tBottom !== undefined) document.getElementById('tBottom').value = data.tBottom;
                     if (data.tempOffset !== undefined) document.getElementById('tempOffset').value = data.tempOffset;
                     if (data.cycleMax !== undefined) document.getElementById('cycleMax').value = data.cycleMax;
+                    if (data.clientEmail !== undefined) document.getElementById('clientEmail').value = data.clientEmail;
+                    if (data.projectId !== undefined) document.getElementById('projectId').value = data.projectId;
+                    if (data.privateKey !== undefined) document.getElementById('privateKey').value = data.privateKey;
+                    if (data.spreadsheetId !== undefined) document.getElementById('spreadsheetId').value = data.spreadsheetId;
+                    
+                    // NTFY instellingen
+                    if (data.ntfyTopic !== undefined) document.getElementById('ntfyTopic').value = data.ntfyTopic;
+                    if (data.ntfyEnabled !== undefined) document.getElementById('ntfyEnabled').checked = data.ntfyEnabled;
+                    if (data.ntfyLogInfo !== undefined) document.getElementById('ntfyLogInfo').checked = data.ntfyLogInfo;
+                    if (data.ntfyLogStart !== undefined) document.getElementById('ntfyLogStart').checked = data.ntfyLogStart;
+                    if (data.ntfyLogStop !== undefined) document.getElementById('ntfyLogStop').checked = data.ntfyLogStop;
+                    if (data.ntfyLogTransition !== undefined) document.getElementById('ntfyLogTransition').checked = data.ntfyLogTransition;
+                    if (data.ntfyLogSafety !== undefined) document.getElementById('ntfyLogSafety').checked = data.ntfyLogSafety;
+                    if (data.ntfyLogError !== undefined) document.getElementById('ntfyLogError').checked = data.ntfyLogError;
+                    if (data.ntfyLogWarning !== undefined) document.getElementById('ntfyLogWarning').checked = data.ntfyLogWarning;
                 })
                 .catch(e => console.error('Settings load error:', e));
         }
@@ -511,6 +807,37 @@ String ConfigWebServer::generateHTML() {
             }
         });
         
+        document.getElementById('googleForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const formData = {
+                tTop: parseFloat(document.getElementById('tTop').value),
+                tBottom: parseFloat(document.getElementById('tBottom').value),
+                tempOffset: parseFloat(document.getElementById('tempOffset').value),
+                cycleMax: parseInt(document.getElementById('cycleMax').value),
+                clientEmail: document.getElementById('clientEmail').value,
+                projectId: document.getElementById('projectId').value,
+                privateKey: document.getElementById('privateKey').value,
+                spreadsheetId: document.getElementById('spreadsheetId').value
+            };
+            
+            try {
+                const response = await fetch('/save', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(formData)
+                });
+                const result = await response.json();
+                if (result.status === 'ok') {
+                    showMessage('Google credentials opgeslagen! Logger wordt herstart...', false);
+                    setTimeout(() => location.reload(), 2000);
+                } else {
+                    showMessage('Fout: ' + result.message, true);
+                }
+            } catch (error) {
+                showMessage('Fout bij opslaan: ' + error.message, true);
+            }
+        });
+        
         document.getElementById('startBtn').addEventListener('click', async () => {
             try {
                 const response = await fetch('/start', { method: 'POST' });
@@ -528,6 +855,54 @@ String ConfigWebServer::generateHTML() {
                 showMessage(result.message || 'Cyclus gestopt', result.status !== 'ok');
             } catch (error) {
                 showMessage('Fout bij stoppen: ' + error.message, true);
+            }
+        });
+        
+        function resetNtfyTopic() {
+            // Genereer een default topic (kan later worden vervangen door backend endpoint)
+            const defaultTopic = 'temp-monitor-' + Math.random().toString(36).substring(2, 10);
+            document.getElementById('ntfyTopic').value = defaultTopic;
+            showMessage('NTFY topic gereset naar standaard', false);
+        }
+        
+        document.getElementById('ntfyResetBtn').addEventListener('click', resetNtfyTopic);
+        
+        document.getElementById('ntfyForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const formData = {
+                tTop: parseFloat(document.getElementById('tTop').value),
+                tBottom: parseFloat(document.getElementById('tBottom').value),
+                tempOffset: parseFloat(document.getElementById('tempOffset').value),
+                cycleMax: parseInt(document.getElementById('cycleMax').value),
+                clientEmail: document.getElementById('clientEmail').value,
+                projectId: document.getElementById('projectId').value,
+                privateKey: document.getElementById('privateKey').value,
+                spreadsheetId: document.getElementById('spreadsheetId').value,
+                ntfyTopic: document.getElementById('ntfyTopic').value,
+                ntfyEnabled: document.getElementById('ntfyEnabled').checked,
+                ntfyLogInfo: document.getElementById('ntfyLogInfo').checked,
+                ntfyLogStart: document.getElementById('ntfyLogStart').checked,
+                ntfyLogStop: document.getElementById('ntfyLogStop').checked,
+                ntfyLogTransition: document.getElementById('ntfyLogTransition').checked,
+                ntfyLogSafety: document.getElementById('ntfyLogSafety').checked,
+                ntfyLogError: document.getElementById('ntfyLogError').checked,
+                ntfyLogWarning: document.getElementById('ntfyLogWarning').checked
+            };
+            
+            try {
+                const response = await fetch('/save', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(formData)
+                });
+                const result = await response.json();
+                if (result.status === 'ok') {
+                    showMessage('NTFY instellingen opgeslagen!', false);
+                } else {
+                    showMessage('Fout: ' + result.message, true);
+                }
+            } catch (error) {
+                showMessage('Fout bij opslaan: ' + error.message, true);
             }
         });
         

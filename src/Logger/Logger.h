@@ -9,6 +9,7 @@
 
 // Forward declarations
 class SystemClock;
+class NtfyNotifier;
 
 struct LogRequest {
     char status[50];
@@ -26,6 +27,7 @@ class Logger {
 public:
     Logger();
     bool begin(const char* clientEmail, const char* projectId, const char* privateKey, const char* spreadsheetId, SystemClock* clock);
+    void setNtfyNotifier(NtfyNotifier* notifier) { ntfyNotifier = notifier; }
     void log(const LogRequest& req);
     bool isTokenReady() const;
     bool hasLogSuccess() const;
@@ -39,6 +41,7 @@ private:
     
     static Logger* instance; // Voor static callback toegang
     SystemClock* systemClock;
+    NtfyNotifier* ntfyNotifier;  // Optionele NTFY notifier
     QueueHandle_t queue;
     TaskHandle_t taskHandle;
     bool tokenReady;
@@ -49,6 +52,9 @@ private:
     const char* spreadsheetId;
     static const int LOG_QUEUE_SIZE = 20;
     static const int MIN_LOG_INTERVAL_MS = 2000;
+    
+    // Helper functie om NTFY notificatie type te bepalen op basis van status
+    void sendNtfyNotification(const LogRequest* req);
 };
 
 #endif // LOGGER_H

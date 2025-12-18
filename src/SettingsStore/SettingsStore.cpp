@@ -5,6 +5,19 @@ const char* SettingsStore::PREF_KEY_T_TOP = "t_top";
 const char* SettingsStore::PREF_KEY_T_BOTTOM = "t_bottom";
 const char* SettingsStore::PREF_KEY_CYCLUS_MAX = "cyclus_max";
 const char* SettingsStore::PREF_KEY_TEMP_OFFSET = "temp_offset";
+const char* SettingsStore::PREF_KEY_CLIENT_EMAIL = "client_email";
+const char* SettingsStore::PREF_KEY_PROJECT_ID = "project_id";
+const char* SettingsStore::PREF_KEY_PRIVATE_KEY = "private_key";
+const char* SettingsStore::PREF_KEY_SPREADSHEET_ID = "spreadsheet_id";
+const char* SettingsStore::PREF_KEY_NTFY_TOPIC = "ntfy_topic";
+const char* SettingsStore::PREF_KEY_NTFY_ENABLED = "ntfy_enabled";
+const char* SettingsStore::PREF_KEY_NTFY_LOG_INFO = "ntfy_log_info";
+const char* SettingsStore::PREF_KEY_NTFY_LOG_START = "ntfy_log_start";
+const char* SettingsStore::PREF_KEY_NTFY_LOG_STOP = "ntfy_log_stop";
+const char* SettingsStore::PREF_KEY_NTFY_LOG_TRANSITION = "ntfy_log_transition";
+const char* SettingsStore::PREF_KEY_NTFY_LOG_SAFETY = "ntfy_log_safety";
+const char* SettingsStore::PREF_KEY_NTFY_LOG_ERROR = "ntfy_log_error";
+const char* SettingsStore::PREF_KEY_NTFY_LOG_WARNING = "ntfy_log_warning";
 
 bool SettingsStore::begin() {
     return true; // Preferences heeft geen expliciete begin() nodig
@@ -37,6 +50,27 @@ Settings SettingsStore::load() {
     return settings;
 }
 
+GoogleCredentials SettingsStore::loadGoogleCredentials() {
+    GoogleCredentials creds;
+    prefs.begin(PREF_NAMESPACE, false);
+    
+    // Laad Google Sheets credentials (default: lege strings)
+    size_t emailLen = prefs.getString(PREF_KEY_CLIENT_EMAIL, creds.clientEmail, sizeof(creds.clientEmail));
+    if (emailLen == 0) creds.clientEmail[0] = '\0';
+    
+    size_t projectLen = prefs.getString(PREF_KEY_PROJECT_ID, creds.projectId, sizeof(creds.projectId));
+    if (projectLen == 0) creds.projectId[0] = '\0';
+    
+    size_t keyLen = prefs.getString(PREF_KEY_PRIVATE_KEY, creds.privateKey, sizeof(creds.privateKey));
+    if (keyLen == 0) creds.privateKey[0] = '\0';
+    
+    size_t sheetLen = prefs.getString(PREF_KEY_SPREADSHEET_ID, creds.spreadsheetId, sizeof(creds.spreadsheetId));
+    if (sheetLen == 0) creds.spreadsheetId[0] = '\0';
+    
+    prefs.end();
+    return creds;
+}
+
 void SettingsStore::save(const Settings& settings) {
     prefs.begin(PREF_NAMESPACE, false); // false = read-write mode
     
@@ -55,9 +89,64 @@ void SettingsStore::save(const Settings& settings) {
     prefs.end();
 }
 
+void SettingsStore::saveGoogleCredentials(const GoogleCredentials& creds) {
+    prefs.begin(PREF_NAMESPACE, false);
+    
+    // Sla Google Sheets credentials op
+    prefs.putString(PREF_KEY_CLIENT_EMAIL, creds.clientEmail);
+    prefs.putString(PREF_KEY_PROJECT_ID, creds.projectId);
+    prefs.putString(PREF_KEY_PRIVATE_KEY, creds.privateKey);
+    prefs.putString(PREF_KEY_SPREADSHEET_ID, creds.spreadsheetId);
+    
+    prefs.end();
+}
+
 void SettingsStore::saveAndLog(const Settings& settings, const char* logMsg) {
     save(settings);
     // Logging wordt later toegevoegd via callback
     (void)logMsg; // Suppress unused parameter warning
+}
+
+void SettingsStore::loadNtfySettings(char* topic, size_t topicSize, NtfyNotificationSettings& settings) {
+    prefs.begin(PREF_NAMESPACE, false);
+    
+    // Laad NTFY topic (default: lege string)
+    size_t topicLen = prefs.getString(PREF_KEY_NTFY_TOPIC, topic, topicSize);
+    if (topicLen == 0 || topicLen >= topicSize) {
+        topic[0] = '\0';
+    }
+    
+    // Laad melding instellingen (default: alles aan)
+    settings.enabled = prefs.getBool(PREF_KEY_NTFY_ENABLED, true);
+    settings.logInfo = prefs.getBool(PREF_KEY_NTFY_LOG_INFO, true);
+    settings.logStart = prefs.getBool(PREF_KEY_NTFY_LOG_START, true);
+    settings.logStop = prefs.getBool(PREF_KEY_NTFY_LOG_STOP, true);
+    settings.logTransition = prefs.getBool(PREF_KEY_NTFY_LOG_TRANSITION, true);
+    settings.logSafety = prefs.getBool(PREF_KEY_NTFY_LOG_SAFETY, true);
+    settings.logError = prefs.getBool(PREF_KEY_NTFY_LOG_ERROR, true);
+    settings.logWarning = prefs.getBool(PREF_KEY_NTFY_LOG_WARNING, true);
+    
+    prefs.end();
+}
+
+void SettingsStore::saveNtfySettings(const char* topic, const NtfyNotificationSettings& settings) {
+    prefs.begin(PREF_NAMESPACE, false);
+    
+    // Sla NTFY topic op
+    if (topic != nullptr) {
+        prefs.putString(PREF_KEY_NTFY_TOPIC, topic);
+    }
+    
+    // Sla melding instellingen op
+    prefs.putBool(PREF_KEY_NTFY_ENABLED, settings.enabled);
+    prefs.putBool(PREF_KEY_NTFY_LOG_INFO, settings.logInfo);
+    prefs.putBool(PREF_KEY_NTFY_LOG_START, settings.logStart);
+    prefs.putBool(PREF_KEY_NTFY_LOG_STOP, settings.logStop);
+    prefs.putBool(PREF_KEY_NTFY_LOG_TRANSITION, settings.logTransition);
+    prefs.putBool(PREF_KEY_NTFY_LOG_SAFETY, settings.logSafety);
+    prefs.putBool(PREF_KEY_NTFY_LOG_ERROR, settings.logError);
+    prefs.putBool(PREF_KEY_NTFY_LOG_WARNING, settings.logWarning);
+    
+    prefs.end();
 }
 

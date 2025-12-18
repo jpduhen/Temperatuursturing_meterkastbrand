@@ -45,13 +45,22 @@ Dit project is ontwikkeld voor het onderzoek naar meterkastbranden (kooiklem max
 - **Timestamp Formaat**: [yy-mm-dd hh:mm:ss] met WiFi en NTP tijd synchronisatie
 - **Cyclus Tijd**: Totaaltijd van volledige cyclus (opwarmen + afkoelen) wordt gelogd bij "Afkoelen tot Opwarmen"
 
+### NTFY Push Notificaties
+- **Automatische Notificaties**: Alle logging events worden automatisch als push notificaties verstuurd
+- **Configureerbare Types**: Per melding type in/uitschakelbaar (START, STOP, transitions, safety, errors, warnings)
+- **NTFY.sh Service**: Gebruikt gratis NTFY.sh service voor push notificaties
+- **Web Interface**: Topic en instellingen configureerbaar via web interface
+- **Persistente Opslag**: Topic en instellingen worden opgeslagen in Preferences
+
 ### Beveiligingsfuncties
 1. **Opwarmtijd Beveiliging**: Als opwarmen langer duurt dan 2x de gemiddelde opwarmtijd, wordt veiligheidskoeling geactiveerd en het systeem schakelt uit
 2. **Veiligheidskoeling Naloop**: 2 minuten naloop na veiligheidskoeling om voldoende afkoeling te garanderen
 3. **Temperatuur Stagnatie Detectie**: Als temperatuur langer dan 2 minuten binnen een 3°C bandbreedte blijft, wordt veiligheidskoeling geactiveerd (detecteert losse thermocouple)
 
 ### Instellingen Opslag
-- **Non-volatile Memory**: T_top, T_bottom, cyclus_max worden opgeslagen in Preferences
+- **Non-volatile Memory**: T_top, T_bottom, cyclus_max, temp_offset worden opgeslagen in Preferences
+- **Google Sheets Credentials**: Client email, project ID, private key, spreadsheet ID worden opgeslagen in Preferences
+- **NTFY Instellingen**: Topic naam en melding type instellingen worden opgeslagen in Preferences
 - **Automatisch Laden**: Instellingen worden automatisch geladen bij opstarten
 - **Automatisch Opslaan**: Instellingen worden automatisch opgeslagen bij wijziging
 
@@ -98,6 +107,21 @@ Het project gebruikt een modulaire architectuur met de volgende modules:
    - GUI updates (temperatuur, status, timers, knoppen)
    - Status weergave (WiFi, Google Sheets)
 
+7. **NtfyNotifier** (`src/NtfyNotifier/`)
+   - Push notificaties via NTFY.sh
+   - Automatische notificaties bij logging events
+   - Configureerbare melding types (START, STOP, transitions, safety, etc.)
+   - Web interface integratie voor instellingen
+   - Persistente opslag van topic en instellingen
+
+8. **WebServer** (`src/WebServer/`)
+   - HTTP webserver voor configuratie
+   - Real-time status API (JSON)
+   - Instellingen beheer (HTML formulier)
+   - START/STOP controle
+   - Google Sheets credentials beheer
+   - NTFY notificatie configuratie
+
 ## Installatie
 
 ### Vereisten
@@ -126,11 +150,18 @@ Het project gebruikt een modulaire architectuur met de volgende modules:
    - Update `SPREADSHEET_ID` in de code
 
 2. **WiFi Configuratie**:
-   - Bij eerste opstarten: connecteer met WiFi AP "ESP32-TemperatuurCyclus"
+   - Bij eerste opstarten: connecteer met WiFi AP "ESP32-TC"
    - Configureer WiFi credentials via web interface
    - Na configuratie: automatische verbinding bij volgende opstarten
+   - Web interface beschikbaar op AP IP adres (standaard: 192.168.4.1)
 
-3. **Hardware Aansluitingen**:
+3. **NTFY Notificaties Setup** (Optioneel):
+   - Installeer NTFY app op telefoon/tablet
+   - Kies een unieke topic naam (bijv. "mijn-temperatuur-monitor-2024")
+   - Abonneer op het topic in de NTFY app
+   - Configureer topic en instellingen via web interface
+
+4. **Hardware Aansluitingen**:
    - MAX6675: CS=22, SO=35, SCK=27
    - SSR Verwarming: GPIO 23
    - SSR Koeling: GPIO 5
@@ -183,7 +214,7 @@ Het project gebruikt een modulaire architectuur met de volgende modules:
 
 Zie [CHANGELOG.md](CHANGELOG.md) voor gedetailleerde versie geschiedenis.
 
-**Huidige Versie**: 3.94
+**Huidige Versie**: 4.00
 
 ## Licentie
 

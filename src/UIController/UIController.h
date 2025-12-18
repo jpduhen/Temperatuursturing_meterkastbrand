@@ -50,6 +50,8 @@ public:
     void showWifiStatus(const char* message, bool isError);
     void showGSStatus(const char* message, bool isError);
     void showGSSuccessCheckmark();
+    void showAPStatus(const char* apName, const char* apIP);
+    void updateGSStatusReset();  // Reset LOGGING status na 1 seconde
     void setButtonsGray();
     void setButtonsNormal();
     
@@ -176,6 +178,10 @@ private:
     lv_obj_t* init_status_label;
     lv_obj_t* wifi_status_label;
     lv_obj_t* gs_status_label;
+    lv_obj_t* ap_status_label_prefix;  // "Instellen AP:"
+    lv_obj_t* ap_status_label_ssid;    // "ESP32-TC" (groen)
+    lv_obj_t* ap_status_label_ip_label; // " IP:" (grijs)
+    lv_obj_t* ap_status_label_ip;      // IP adres (groen)
     
     // LVGL objecten - Graph screen
     lv_obj_t* screen_graph;
@@ -196,6 +202,7 @@ private:
     
     // Status tekst opslag (voor showGSSuccessCheckmark)
     char last_gs_status_text[128];
+    unsigned long gs_logging_start_time;  // Tijdstempel wanneer LOGGING status wordt getoond
     
     // Display buffer (voor LVGL)
     uint32_t* draw_buf;

@@ -3,6 +3,7 @@
 
 #include <WebServer.h>
 #include <Arduino.h>
+#include "../NtfyNotifier/NtfyNotifier.h"
 
 // Forward declarations
 class SettingsStore;
@@ -25,7 +26,9 @@ public:
     // Callbacks voor acties
     typedef void (*StartCallback)();
     typedef void (*StopCallback)();
-    typedef void (*SettingsChangeCallback)(float tTop, float tBottom, float tempOffset, int cycleMax);
+    typedef void (*SettingsChangeCallback)(float tTop, float tBottom, float tempOffset, int cycleMax,
+                                           const char* clientEmail, const char* projectId, 
+                                           const char* privateKey, const char* spreadsheetId);
     
     void setStartCallback(StartCallback cb) { startCallback = cb; }
     void setStopCallback(StopCallback cb) { stopCallback = cb; }
@@ -41,6 +44,15 @@ public:
     typedef float (*GetTbottomCallback)();
     typedef int (*GetCycleMaxCallback)();
     typedef float (*GetTempOffsetCallback)();
+    typedef const char* (*GetClientEmailCallback)();
+    typedef const char* (*GetProjectIdCallback)();
+    typedef const char* (*GetPrivateKeyCallback)();
+    typedef const char* (*GetSpreadsheetIdCallback)();
+    
+    // NTFY callbacks
+    typedef const char* (*GetNtfyTopicCallback)();
+    typedef NtfyNotificationSettings (*GetNtfySettingsCallback)();
+    typedef void (*SaveNtfySettingsCallback)(const char* topic, const NtfyNotificationSettings& settings);
     
     void setGetCurrentTempCallback(GetCurrentTempCallback cb) { getCurrentTempCallback = cb; }
     void setGetMedianTempCallback(GetMedianTempCallback cb) { getMedianTempCallback = cb; }
@@ -51,6 +63,13 @@ public:
     void setGetTbottomCallback(GetTbottomCallback cb) { getTbottomCallback = cb; }
     void setGetCycleMaxCallback(GetCycleMaxCallback cb) { getCycleMaxCallback = cb; }
     void setGetTempOffsetCallback(GetTempOffsetCallback cb) { getTempOffsetCallback = cb; }
+    void setGetClientEmailCallback(GetClientEmailCallback cb) { getClientEmailCallback = cb; }
+    void setGetProjectIdCallback(GetProjectIdCallback cb) { getProjectIdCallback = cb; }
+    void setGetPrivateKeyCallback(GetPrivateKeyCallback cb) { getPrivateKeyCallback = cb; }
+    void setGetSpreadsheetIdCallback(GetSpreadsheetIdCallback cb) { getSpreadsheetIdCallback = cb; }
+    void setGetNtfyTopicCallback(GetNtfyTopicCallback cb) { getNtfyTopicCallback = cb; }
+    void setGetNtfySettingsCallback(GetNtfySettingsCallback cb) { getNtfySettingsCallback = cb; }
+    void setSaveNtfySettingsCallback(SaveNtfySettingsCallback cb) { saveNtfySettingsCallback = cb; }
 
 private:
     WebServer server;
@@ -74,6 +93,13 @@ private:
     GetTbottomCallback getTbottomCallback;
     GetCycleMaxCallback getCycleMaxCallback;
     GetTempOffsetCallback getTempOffsetCallback;
+    GetClientEmailCallback getClientEmailCallback;
+    GetProjectIdCallback getProjectIdCallback;
+    GetPrivateKeyCallback getPrivateKeyCallback;
+    GetSpreadsheetIdCallback getSpreadsheetIdCallback;
+    GetNtfyTopicCallback getNtfyTopicCallback;
+    GetNtfySettingsCallback getNtfySettingsCallback;
+    SaveNtfySettingsCallback saveNtfySettingsCallback;
     
     // Handler functies
     void handleRoot();
