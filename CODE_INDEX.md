@@ -199,6 +199,7 @@
 - **`REFACTORING_PLAN.md`** - Refactoring plan (historisch)
 - **`CODE_INDEX.md`** - Dit document
 - **`WEBSERVER_IMPLEMENTATIE_GIDS.md`** - WebServer implementatie gids
+- **`src/NtfyNotifier/README_NTFY.md`** - NTFY Notifier gebruikersgids
 - **`MAX6675_ANALYSE.md`** - MAX6675 sensor analyse
 - **`MAX6675_LIBRARY_REVIEW.md`** - Library review documentatie
 
